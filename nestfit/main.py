@@ -23,16 +23,21 @@ class SyntheticSpectrum:
 
     def __init__(self, xarr, params, noise=0.03, vsys=0, set_seed=False):
         """
-        Construct a mixture of Gaussians expressed as:
-            f(x) = A * exp(-(x - c)^2 / (2 * s^2))
-        for "A" amplitude, "c" centroid, and "s" standard deviation.
+        Construct a mixture of ammonia model spectra given parameters:
+            voff : centroid velocity offset from zero
+            trot : rotation temperature
+            tex  : excitation temperature
+            ntot : para-ammonia column density
+            sigm : velocity dispersion or gaussian sigma
 
         Parameters
         ----------
         xarr : pyspeckit.spectrum.units.SpectroscopicAxis
         params : np.ndarray
+            1D array of parameters. Values are strided as [A1, A2, B1, B2, ...]
+            for parameters A and B for components 1 and 2.
         noise : number, default 0.03
-            Noise standard deviation
+            Standard deviation of the baseline noise
         vsys : number, default 0
         set_seed : bool, default=False
             If `True` will use a default seed of 5 for the np.random module.
