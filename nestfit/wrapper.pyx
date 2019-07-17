@@ -163,7 +163,7 @@ cdef void c_amm11_predict(double[:] xarr, double[:] spec, double[:] params):
             # components that are more than exp(-20) (4e-8) away from the HF
             # line center.
             for k in range(NHF11):
-                tau_exp = (nu + hf_nucen[k])**2 / hf_denom[k]
+                tau_exp = square(nu + hf_nucen[k]) / hf_denom[k]
                 if tau_exp < 20:
                     tau_hf_sum += tau_hf[k] * c_exp(-tau_exp)
             spec[j] += (
@@ -229,7 +229,7 @@ cdef void c_amm22_predict(double[:] xarr, double[:] spec, double[:] params):
             # components that are more than exp(-20) (4e-8) away from the HF
             # line center.
             for k in range(NHF22):
-                tau_exp = (nu + hf_nucen[k])**2 / hf_denom[k]
+                tau_exp = square(nu + hf_nucen[k]) / hf_denom[k]
                 if tau_exp < 20:
                     tau_hf_sum += tau_hf[k] * c_exp(-tau_exp)
             spec[j] += (
@@ -344,7 +344,7 @@ cdef class AmmoniaRunner:
         spectra : iterable
             List of spectrum wrapper objects
         utrans : `PriorTransformer`
-            Prior transformer class that samples th prior from the unit cube
+            Prior transformer class that samples the prior from the unit cube
             for the five model ammonia parameters.
         ncomp : int, default 1
             Number of velocity components
