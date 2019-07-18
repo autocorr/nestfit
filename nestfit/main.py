@@ -3,8 +3,6 @@
 Gaussian mixture fitting with Nested Sampling.
 """
 
-from pathlib import Path
-
 import h5py
 import numpy as np
 import pandas as pd
@@ -129,37 +127,26 @@ class AmmoniaSpectrum:
         return self.prefactor - sumsqdev / (2 * self.noise**2)
 
 
-def run_nested(runner, basename='run/test_run_', call_prior=False, mn_kwargs=None):
+def run_nested(runner, dumper, mn_kwargs=None):
     if mn_kwargs is None:
         mn_kwargs = {
-                'outputfiles_basename': basename,
+                #'n_clustering_params': runner.ncomp,
+                'outputfiles_basename': 'run/chain1-',
                 'importance_nested_sampling': False,
                 'multimodal': True,
-                'evidence_tolerance': 0.5,
-                'n_live_points': 100,
-                'n_clustering_params': runner.ncomp,
                 #'const_efficiency_mode': True,
+                'n_live_points': 60,
+                'evidence_tolerance': 0.5,
                 'sampling_efficiency': 0.3,
                 'n_iter_before_update': 2000,
-                'resume': False,
                 'verbose': True,
+                'resume': False,
+                'write_output': False,
+                'dump_callback': dumper.dump,
         }
-    if call_prior:
-        pymultinest.run(
-                runner.loglikelihood, runner.prior_transform,
-                runner.n_params, **mn_kwargs
-        )
-    else:
-        pymultinest.run(
-                runner.loglikelihood, None, runner.n_params, **mn_kwargs
-        )
-    analyzer = pymultinest.Analyzer(
-            outputfiles_basename=basename,
-            n_params=runner.n_params,
+    pymultinest.run(
+            runner.loglikelihood, None, runner.n_params, **mn_kwargs
     )
-    lnZ = analyzer.get_stats()['global evidence']
-    print(':: Evidence Z:', lnZ/np.log(10))
-    return analyzer
 
 
 def test_nested(ncomp=2):
@@ -171,66 +158,79 @@ def test_nested(ncomp=2):
         for syn, name in zip(synspec, ('oneone', 'twotwo'))
     ]
     utrans = PriorTransformer()
-    runner = AmmoniaRunner(
-            spectra,
-            utrans,
-            ncomp,
-    )
-    analyzer = run_nested(runner)
-    return synspec, spectra, runner, analyzer
+    dumper = HdfDumper('test_001')
+    runner = AmmoniaRunner(spectra, utrans, ncomp)
+    run_nested(runner, dumper)
+    dumper.write_hdf()
+    return synspec, spectra, runner
 
 
-def marginals_to_pandas(a_stats):
-    margs = a_stats['marginals']
-    df = pd.DataFrame(margs)
-    new_cols = {
-            'median': 'q50',
-            'q01%':   'q01',
-            'q10%':   'q10',
-            'q25%':   'q25',
-            'q75%':   'q75',
-            'q90%':   'q90',
-            'q99%':   'q99',
-            '1sigma': 'ci_1sigma',
-            '2sigma': 'ci_2sigma',
-            '3sigma': 'ci_3sigma',
-            '5sigma': 'ci_5sigma',
-    }
-    df = df.rename(columns=new_cols)
-    df = df[[
-        'q01', 'q10', 'q25', 'q50', 'q75', 'q90', 'q99',
-        'sigma', 'ci_1sigma', 'ci_2sigma', 'ci_3sigma', 'ci_5sigma',
-    ]]
-    for col in ('ci_1sigma', 'ci_2sigma', 'ci_3sigma', 'ci_5sigma'):
-        df[col+'_lo'] = df[col].apply(lambda x: x[0])
-        df[col+'_hi'] = df[col].apply(lambda x: x[1])
-        del df[col]
-    return df
+class HdfDumper:
+    quantiles = np.array([
+        0.00, 0.01, 0.10, 0.25, 0.50, 0.75, 0.90, 0.99, 1.00,
+        1.58655254e-1, 0.84134475,  # 1-sigma credible interval
+        2.27501319e-2, 0.97724987,  # 2-sigma credible interval
+        1.34989803e-3, 0.99865010,  # 3-sigma credible interval
+    ])
+    marginal_cols = [
+        'min', 'p01', 'p10', 'p25', 'p50', 'p75', 'p90', 'p99', 'max',
+        '1s_lo', '1s_hi', '2s_lo', '2s_hi', '3s_lo', '3s_hi',
+    ]
 
+    def __init__(self, group_name, store_name='results'):
+        self.group_name = group_name
+        if not store_name.endswith('hdf5'):
+            store_name += '.hdf5'
+        self.store_name = store_name
+        # These attributes are written to on each to call to `dump`
+        self.n_calls = 0
+        self.n_samples = None
+        self.n_live = None
+        self.n_params = None
+        self.max_loglike = None
+        self.lnZ = None
+        self.lnZ_err = None
+        self.posteriors = None
 
-def save_run(runner, analyzer, group_name, store_name='nestfit'):
-    # FIXME compute AIC/BIC here from model and max_loglike
-    if not store_name.endswith('.hdf5'):
-        store_name += '.hdf5'
-    a_stats = analyzer.get_stats()
-    bestfit = analyzer.get_best_fit()
-    marg_df = marginals_to_pandas(a_stats)
-    posteriors = analyzer.get_equal_weighted_posterior()
-    with h5py.File(store_name, 'a') as hdf:
-        group = hdf.create_group(group_name)
-        # general attributes:
-        group.attrs['model_name']     = runner.model_name
-        group.attrs['ncomp']          = runner.ncomp
-        group.attrs['par_labels']     = runner.par_labels
-        group.attrs['std_noise']      = runner.noise
-        group.attrs['null_lnZ']       = runner.null_lnZ
-        group.attrs['global_lnZ']     = a_stats['global evidence']
-        group.attrs['global_lnZ_err'] = a_stats['global evidence error']
-        group.attrs['max_loglike']    = bestfit['log_likelihood']
-        # datasets:
-        group.create_dataset('map_params', data=np.array(bestfit['parameters']))
-        group.create_dataset('posteriors', data=posteriors)
-        group.create_dataset('marginals', data=marg_df.values)
+    def dump(self, n_samples, n_live, n_params, phys_live, posteriors,
+            param_constr, max_loglike, lnZ, ins_lnZ, lnZ_err, null_context):
+        self.n_calls += 1
+        # The last two iterations will have the same number of samples, so
+        # only copy over the parameters on the last iteration.
+        if self.n_samples == n_samples:
+            self.n_samples   = n_samples
+            self.n_live      = n_live
+            self.n_params    = n_params
+            self.max_loglike = max_loglike
+            self.lnZ         = lnZ
+            self.lnZ_err     = lnZ_err
+            # NOTE The array must be copied because MultiNest will free
+            # the memory accessed by this view.
+            self.posteriors  = posteriors.copy()
+        else:
+            self.n_samples = n_samples
+
+    def calc_marginals(self):
+        # The last two columns of the posterior array are -2*lnL and X*L/Z
+        return np.quantile(self.posteriors[:,:-2], self.quantiles, axis=0)
+
+    def write_hdf(self):
+        with h5py.File(self.store_name, 'a') as hdf:
+            group = hdf.create_group(self.group_name)
+            # general run attributes:
+            # TODO model_name, ncomp, par_labels, std_noise, null_lnZ
+            # TODO calculate the AIC/AICc/BIC
+            group.attrs['n_samples']      = self.n_samples
+            group.attrs['n_live']         = self.n_live
+            group.attrs['n_params']       = self.n_params
+            group.attrs['global_lnZ']     = self.lnZ
+            group.attrs['global_lnZ_err'] = self.lnZ_err
+            group.attrs['max_loglike']    = self.max_loglike
+            # posterior samples and statistics
+            # TODO bestfit, MAP
+            group.attrs['marginal_cols']  = self.marginal_cols
+            group.create_dataset('posteriors', data=self.posteriors)
+            group.create_dataset('marginals', data=self.calc_marginals())
 
 
 if __name__ == '__main__':

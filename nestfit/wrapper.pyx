@@ -109,14 +109,14 @@ cdef inline double square(double x):
 cdef void c_amm11_predict(double[:] xarr, double[:] spec, double[:] params):
     cdef:
         int i, j, k
-        int size = xarr.shape[0]
-        int ncomp = params.shape[0] // 5
+        int size = xarr.size
+        int ncomp = params.size // 5
         double trot, tex, ntot, sigm, voff
         double Z11, Qtot, pop_rotstate, expterm, fracterm, widthterm, tau_main
         double hf_freq, hf_width, hf_offset, nu, T0, tau_hf_sum, tau_exp
-        double hf_denom[NHF11]
-        double hf_nucen[NHF11]
         double tau_hf[NHF11]
+        double hf_nucen[NHF11]
+        double hf_inv_denom[NHF11]
     spec[:] = 0
     for i in range(ncomp):
         voff = params[        i]
@@ -131,7 +131,7 @@ cdef void c_amm11_predict(double[:] xarr, double[:] spec, double[:] params):
             Qtot += (
                     (2 * JPARA[j] + 1)
                     * c_exp(-H * (BROT * JPARA[j] * (JPARA[j] + 1)
-                    + (CROT - BROT) * JPARA[j]**2) / (KB * trot))
+                    + (CROT - BROT) * square(JPARA[j])) / (KB * trot))
             )
         # Calculate the main line optical depth
         pop_rotstate = 10**ntot * Z11 / Qtot
@@ -149,9 +149,9 @@ cdef void c_amm11_predict(double[:] xarr, double[:] spec, double[:] params):
             hf_freq     = (1 - VOFF11[j] / CKMS) * NU11
             hf_width    = c_abs(sigm / CKMS * hf_freq)
             hf_offset   = voff / CKMS * hf_freq
-            hf_denom[j] = 2.0 * hf_width**2
             hf_nucen[j] = hf_offset - hf_freq
             tau_hf[j]   = tau_main * TAU_WTS11[j]
+            hf_inv_denom[j] = 1 / (2.0 * square(hf_width))
         # For each channel in the spectrum compute the summed optical depth
         # over all of the hyperfine lines and then convert it to temperature
         # units.
@@ -163,7 +163,7 @@ cdef void c_amm11_predict(double[:] xarr, double[:] spec, double[:] params):
             # components that are more than exp(-20) (4e-8) away from the HF
             # line center.
             for k in range(NHF11):
-                tau_exp = square(nu + hf_nucen[k]) / hf_denom[k]
+                tau_exp = square(nu + hf_nucen[k]) * hf_inv_denom[k]
                 if tau_exp < 20:
                     tau_hf_sum += tau_hf[k] * c_exp(-tau_exp)
             spec[j] += (
@@ -175,14 +175,14 @@ cdef void c_amm11_predict(double[:] xarr, double[:] spec, double[:] params):
 cdef void c_amm22_predict(double[:] xarr, double[:] spec, double[:] params):
     cdef:
         int i, j, k
-        int size = xarr.shape[0]
-        int ncomp = params.shape[0] // 5
+        int size = xarr.size
+        int ncomp = params.size // 5
         double trot, tex, ntot, sigm, voff
         double Z22, Qtot, pop_rotstate, expterm, fracterm, widthterm, tau_main
         double hf_freq, hf_width, hf_offset, nu, T0, tau_hf_sum, tau_exp
-        double hf_denom[NHF22]
-        double hf_nucen[NHF22]
         double tau_hf[NHF22]
+        double hf_nucen[NHF22]
+        double hf_inv_denom[NHF22]
     spec[:] = 0
     for i in range(ncomp):
         voff = params[        i]
@@ -197,7 +197,7 @@ cdef void c_amm22_predict(double[:] xarr, double[:] spec, double[:] params):
             Qtot += (
                     (2 * JPARA[j] + 1)
                     * c_exp(-H * (BROT * JPARA[j] * (JPARA[j] + 1)
-                    + (CROT - BROT) * JPARA[j]**2) / (KB * trot))
+                    + (CROT - BROT) * square(JPARA[j])) / (KB * trot))
             )
         # Calculate the main line optical depth
         pop_rotstate = 10**ntot * Z22 / Qtot
@@ -215,9 +215,9 @@ cdef void c_amm22_predict(double[:] xarr, double[:] spec, double[:] params):
             hf_freq     = (1 - VOFF22[j] / CKMS) * NU22
             hf_width    = c_abs(sigm / CKMS * hf_freq)
             hf_offset   = voff / CKMS * hf_freq
-            hf_denom[j] = 2.0 * hf_width**2
             hf_nucen[j] = hf_offset - hf_freq
             tau_hf[j]   = tau_main * TAU_WTS22[j]
+            hf_inv_denom[j] = 1 / (2.0 * square(hf_width))
         # For each channel in the spectrum compute the summed optical depth
         # over all of hte hyperfine lines and then convert it to temperature
         # units.
@@ -229,7 +229,7 @@ cdef void c_amm22_predict(double[:] xarr, double[:] spec, double[:] params):
             # components that are more than exp(-20) (4e-8) away from the HF
             # line center.
             for k in range(NHF22):
-                tau_exp = square(nu + hf_nucen[k]) / hf_denom[k]
+                tau_exp = square(nu + hf_nucen[k]) * hf_inv_denom[k]
                 if tau_exp < 20:
                     tau_hf_sum += tau_hf[k] * c_exp(-tau_exp)
             spec[j] += (
@@ -303,7 +303,7 @@ cdef class PriorTransformer:
 
     cpdef void transform(self, double[:] utheta, int n):
         # FIXME may do unsafe writes if `utheta` does not have the same size
-        # as `n`.
+        # as the number of components `n`.
         cdef:
             int i
             double u, umin, umax
@@ -366,6 +366,16 @@ cdef class AmmoniaRunner:
         self.pred11 = np.empty_like(self.xarr11)
         self.pred22 = np.empty_like(self.xarr22)
         self.null_lnZ = np.sum([s.null_lnZ for s in self.spectra])
+        if self.xarr11.size != self.data11.size:
+            raise ValueError(
+                    'xarr and data for (1,1) must be the same size: '
+                    f'{self.xarr11.size}, {self.data11.size}'
+            )
+        if self.xarr22.size != self.data22.size:
+            raise ValueError(
+                    'xarr and data for (2,2) must be the same size: '
+                    f'{self.xarr22.size}, {self.data22.size}'
+            )
 
     cpdef double loglikelihood(self, object utheta, int ndim, int n_params):
         cdef:
@@ -376,9 +386,9 @@ cdef class AmmoniaRunner:
         c_amm11_predict(self.xarr11, self.pred11, params)
         c_amm22_predict(self.xarr22, self.pred22, params)
         lnL11, lnL22 = 0.0, 0.0
-        for i in range(self.data11.shape[0]):
+        for i in range(self.data11.size):
             lnL11 += square(self.data11[i] - self.pred11[i])
-        for i in range(self.data22.shape[0]):
+        for i in range(self.data22.size):
             lnL22 += square(self.data22[i] - self.pred22[i])
         lnL11 = self.spectra[0].loglikelihood(lnL11)
         lnL22 = self.spectra[1].loglikelihood(lnL22)
