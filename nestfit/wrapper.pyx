@@ -334,7 +334,7 @@ cdef class AmmoniaRunner:
         double[:] xarr11, xarr22, data11, data22, pred11, pred22
         PriorTransformer utrans
     cdef readonly:
-        int ncomp, n_params
+        int ncomp, n_params, n_chan_tot
         double null_lnZ
 
     def __init__(self, spectra, utrans, ncomp=1):
@@ -366,6 +366,7 @@ cdef class AmmoniaRunner:
         self.pred11 = np.empty_like(self.xarr11)
         self.pred22 = np.empty_like(self.xarr22)
         self.null_lnZ = np.sum([s.null_lnZ for s in self.spectra])
+        self.n_chan_tot = self.xarr11.size + self.xarr22.size
         if self.xarr11.size != self.data11.size:
             raise ValueError(
                     'xarr and data for (1,1) must be the same size: '
