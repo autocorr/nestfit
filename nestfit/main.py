@@ -89,7 +89,7 @@ class SyntheticSpectrum:
         self.sampled_spec = self.sum_spec + self.noise_spec
 
 
-def test_spectra():
+def get_test_spectra():
     freqs = pyspeckit.spectrum.models.ammonia_constants.freq_dict.copy()
     Axis = pyspeckit.spectrum.units.SpectroscopicAxis
     vchan = 0.158  # km/s
@@ -140,7 +140,7 @@ def run_nested(runner, dumper, mn_kwargs=None):
 
 
 def test_nested(ncomp=2):
-    synspec = test_spectra()
+    synspec = get_test_spectra()
     spectra = [
         AmmoniaSpectrum(
             pyspeckit.Spectrum(
@@ -149,7 +149,7 @@ def test_nested(ncomp=2):
         for syn in synspec
     ]
     utrans = PriorTransformer()
-    dumper = HdfDumper('test_001')
+    dumper = HdfDumper(f'001/{ncomp}', store_name='test')
     runner = AmmoniaRunner(spectra, utrans, ncomp)
     run_nested(runner, dumper)
     dumper.write_hdf(runner=runner)
@@ -170,9 +170,7 @@ class HdfDumper:
 
     def __init__(self, group_name, store_name='results'):
         self.group_name = group_name
-        if not store_name.endswith('hdf5'):
-            store_name += '.hdf5'
-        self.store_name = store_name
+        self.store_name = check_hdf5_ext(store_name)
         # These attributes are written to by the method `dump`
         self.n_calls = 0
         self.n_samples = None
@@ -428,5 +426,20 @@ def parse_results_to_cube(store_name, header):
                 pardata[i_lat,i_lon] = ncolsum
     hdu = fits.PrimaryHDU(pardata)
     hdu.writeto(f'{store_name}_ncolsum.fits')
+
+
+def test_pyspeckit_profiling_compare(n=100):
+    # factors which provide constant overhead
+    s11, s22 = get_test_spectra()
+    xarr = s11.xarr.value.copy()
+    pred = np.empty_like(xarr)
+    params = np.array([-1.0, 10.0, 4.0, 14.5,  0.3])
+    #        ^~~~~~~~~ voff, trot, tex, ntot, sigm
+    # loop spectra to average function calls by themselves
+    for _ in range(n):
+        pyspeckit.spectrum.models.ammonia.ammonia(
+                s11.xarr, xoff_v=-1.0, trot=10.0, tex=4.0, ntot=14.5,
+                width=0.3, fortho=0, line_names=['oneone'])
+        amm11_predict(xarr, pred, params)
 
 
