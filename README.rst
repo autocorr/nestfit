@@ -16,18 +16,19 @@ Preliminary tests fitting a single ammonia velocity component with NS require
 approximately two orders of magnitude more likelihood evaluations than LM (~50
 versus ~3000). However, while NS comes with a substantial computational cost,
 it has several important advantages not offered by non-linear least squares
-algorithm:
+algorithms:
 
 - initial guesses are not required
-- robust to highly multi-modal posterior distributions
+- exploration robust to highly multi-modal posterior distributions
 - the full set of posteriors are returned for robust estimation of parameter
   uncertainties
 - the evidence is computed for comparison between models
 - priors are specified to condition the data on reasonable distributions within
   parameter space
 
-The code has been optimized for numerical efficiency by implementing the
-ammonia model prediction in a Cython extension module. Comparing to PySpecKit
+To make fitting large data-cubes composed of more than 10,000 spectra
+computationally tractable, the code has been optimized by implementing the
+spectrum prediction in a Cython extension module. Comparing to the PySpecKit
 v0.1.22 reference implementation as of August, 2019, this provides a factor of
 104 times reduction in time to compute the predicted spectrum.
 
