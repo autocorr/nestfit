@@ -12,7 +12,9 @@ from matplotlib import pyplot as plt
 
 import corner
 
-from nestfit import get_par_labels
+from nestfit import (get_par_labels, PLOT_DIR)
+from nestfit.main import test_spectra
+from nestfit.wrapped import (amm11_predict, amm22_predict)
 
 
 plt.rc('font', size=10, family='serif')

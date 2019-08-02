@@ -3,6 +3,10 @@
 Gaussian mixture fitting with Nested Sampling.
 """
 
+import multiprocessing
+from copy import deepcopy
+from pathlib import Path
+
 import h5py
 import numpy as np
 import pandas as pd
@@ -11,10 +15,11 @@ import corner
 import pyspeckit
 import pymultinest
 import spectral_cube
+from astropy.io import fits
 from astropy import units as u
 
-from nestfit.wrapped import (amm11_predict, amm22_predict, PriorTransformer,
-        AmmoniaRunner)
+from nestfit.wrapped import (amm11_predict, amm22_predict,
+        PriorTransformer, AmmoniaSpectrum, AmmoniaRunner)
 
 
 class SyntheticSpectrum:
@@ -112,22 +117,6 @@ def test_spectra():
     return spectra
 
 
-class AmmoniaSpectrum:
-    def __init__(self, psk_spec, noise, name=None):
-        assert noise > 0
-        self.psk = psk_spec
-        self.noise = noise
-        self.name = name
-        self.data = psk_spec.data.data
-        self.size = psk_spec.shape[0]
-        self.xarr = psk_spec.xarr.as_unit('Hz')
-        self.prefactor = -self.size / 2 * np.log(2 * np.pi * noise**2)
-        self.null_lnZ = self.loglikelihood(np.sum(self.data**2))
-
-    def loglikelihood(self, sumsqdev):
-        return self.prefactor - sumsqdev / (2 * self.noise**2)
-
-
 def run_nested(runner, dumper, mn_kwargs=None):
     if mn_kwargs is None:
         mn_kwargs = {
@@ -154,9 +143,10 @@ def test_nested(ncomp=2):
     synspec = test_spectra()
     spectra = [
         AmmoniaSpectrum(
-            pyspeckit.Spectrum(xarr=syn.xarr, data=syn.sampled_spec, header={}),
-            syn.noise, name)
-        for syn, name in zip(synspec, ('oneone', 'twotwo'))
+            pyspeckit.Spectrum(
+                xarr=syn.xarr, data=syn.sampled_spec, header={}),
+            syn.noise)
+        for syn in synspec
     ]
     utrans = PriorTransformer()
     dumper = HdfDumper('test_001')
@@ -265,31 +255,32 @@ class CubeStack:
 
     def __init__(self, cube11, cube22, noise=0.320):
         # FIXME handle noise per pixel from an explicit error map
-        # cube.with_fill_value(0).filled()
-        self.cube11 = cube11.to('K')
-        self.cube22 = cube22.to('K')
+        self.cube11 = cube11.to('K')._data.copy()
+        self.cube22 = cube22.to('K')._data.copy()
         self.noise  = noise
-        Axis = pyspeckit.spectrum.units.SpectroscopicAxis
-        self.xarr11 = Axis(
-                self.cube11.spectral_axis,
+        self.shape = cube11.shape
+        self.spatial_shape = (self.shape[1], self.shape[2])
+        self.xarr11 = pyspeckit.spectrum.units.SpectroscopicAxis(
+                cube11.spectral_axis,
                 velocity_convention='radio',
                 refX=self.freqs['oneone'],
-        ).as_unit('Hz')
-        self.xarr22 = Axis(
-                self.cube22.spectral_axis,
+        ).as_unit('Hz').value.copy()
+        self.xarr22 = pyspeckit.spectrum.units.SpectroscopicAxis(
+                cube22.spectral_axis,
                 velocity_convention='radio',
                 refX=self.freqs['twotwo'],
-        ).as_unit('Hz')
-        self.shape = self.cube11.shape
+        ).as_unit('Hz').value.copy()
 
     def get_spectra(self, i_lon, i_lat):
         spec11 = pyspeckit.Spectrum(
                 xarr=self.xarr11,
+                xarrkwargs={'unit': 'Hz'},
                 data=self.cube11[:,i_lat,i_lon],
                 header={},
         )
         spec22 = pyspeckit.Spectrum(
                 xarr=self.xarr22,
+                xarrkwargs={'unit': 'Hz'},
                 data=self.cube22[:,i_lat,i_lon],
                 header={},
         )
@@ -298,41 +289,144 @@ class CubeStack:
         return spectra
 
 
-def test_fit_cube():
-    cube11 = spectral_cube.SpectralCube.read('data/test_cube_11.fits')[:-1]
-    cube22 = spectral_cube.SpectralCube.read('data/test_cube_22.fits')[:-1]
-    stack = CubeStack(cube11, cube22, noise=0.320)
-    lnZ_thresh = 16.1  # log10 -> 7 ... approx 4 sigma
-    store_name = 'run/test_cube_fit.hdf5'
-    # parallelize from here. turn into function that takes stack, slice
-    # cubes into stripes by row or column, write to individual out file,
-    # then concat HDF tables afterward.
-    utrans = PriorTransformer(vsys=81.5)
-    n_chan, n_lat, n_lon = stack.shape
-    for i_lat in range(n_lat):
-        for i_lon in range(n_lon):
+def check_hdf5_ext(store_name):
+    if store_name.endswith('.hdf5'):
+        return store_name
+    else:
+        return f'{store_name}.hdf5'
+
+
+class MappableFitter:
+    def __init__(self, stack, utrans, lnZ_thresh=16.1):
+        self.stack = stack
+        self.utrans = utrans
+        self.lnZ_thresh = lnZ_thresh
+
+    def fit(self, *args):
+        (all_lon, all_lat), store_name = args
+        store_file = check_hdf5_ext(store_name)
+        for (i_lon, i_lat) in zip(all_lon, all_lat):
+            spectra = self.stack.get_spectra(i_lon, i_lat)
             group_name = f'pix_{i_lon}_{i_lat}'
-            spectra = stack.get_spectra(i_lon, i_lat)
-            old_lnZ = spectra[0].null_lnZ + spectra[1].null_lnZ
-            new_lnZ = 1e100
+            old_lnZ = -1e100
+            new_lnZ = np.sum([s.null_lnZ for s in spectra])
             ncomp = 0
             # Iteratively fit additional components until they no longer
             # produce a significant increase in the evidence.
-            while new_lnZ - old_lnZ > lnZ_thresh:
+            while new_lnZ - old_lnZ > self.lnZ_thresh:
                 ncomp += 1
                 if ncomp == 3:  # FIXME for testing
                     break
                 print(f':: ({i_lon}, {i_lat}) -> N = {ncomp}')
                 sub_group_name = group_name + f'/{ncomp}'
                 dumper = HdfDumper(sub_group_name, store_name=store_name)
-                runner = AmmoniaRunner(spectra, utrans, ncomp)
+                runner = AmmoniaRunner(spectra, self.utrans, ncomp)
                 run_nested(runner, dumper)
                 dumper.write_hdf(runner=runner)
-                new_lnZ = dumper.lnZ
-            with h5py.File(store_name, 'a') as hdf:
+                old_lnZ, new_lnZ = new_lnZ, dumper.lnZ
+            with h5py.File(store_file, 'a') as hdf:
                 group = hdf[group_name]
                 group.attrs['i_lon'] = i_lon
                 group.attrs['i_lat'] = i_lat
                 group.attrs['nbest'] = ncomp - 1
+
+
+def get_multiproc_indices(shape, nproc):
+    lat_ix, lon_ix = np.indices(shape)
+    indices = [
+            (lon_ix[...,i::nproc].flatten(), lat_ix[...,i::nproc].flatten())
+            for i in range(nproc)
+    ]
+    return indices
+
+
+def link_store_files(store_name, chunk_names):
+    store_file = check_hdf5_ext(store_name)
+    chunk_dir = Path(f'{store_name}_chunks')
+    if not chunk_dir.exists():
+        chunk_dir.mkdir()
+    with h5py.File(store_file, 'a') as m_hdf:
+        for chunk_name in chunk_names:
+            chunk_file = Path(f'{chunk_name}.hdf5')
+            chunk_file.rename(chunk_dir/chunk_file)
+            chunk_file = chunk_dir / chunk_file
+            with h5py.File(chunk_file, 'r') as p_hdf:
+                for group_name in p_hdf:
+                    m_hdf[group_name] = h5py.ExternalLink(chunk_file, group_name)
+
+
+def fit_cube(stack, utrans, store_name='run/test_cube_fit', nproc=1):
+    n_chan, n_lat, n_lon = stack.shape
+    mappable = MappableFitter(stack, utrans)
+    # create list of indices for each process
+    chunk_names = [f'{store_name}_chunk{i}' for i in range(nproc)]
+    indices = get_multiproc_indices(stack.spatial_shape, nproc)
+    sequence = list(zip(indices, chunk_names))
+    if nproc == 1:
+        mappable.fit((indices[0], store_name))
+        return
+    # spawn processes and process cube
+    # NOTE A simple `multiprocessing.Pool` cannot be used because the
+    # Cython C-extensions cannot be pickled without effort to implement
+    # the pickling protocol on all classes.
+    # FIXME no error handling if a process fails/raises an exception
+    procs = [
+            multiprocessing.Process(target=mappable.fit, args=args)
+            for args in sequence
+    ]
+    for proc in procs:
+        proc.start()
+    for proc in procs:
+        proc.join()
+    # link all of the HDF5 files together
+    link_store_files(store_name, chunk_names)
+
+
+def test_fit_cube():
+    cube11 = spectral_cube.SpectralCube.read('data/test_cube_11.fits')[:-1]
+    cube22 = spectral_cube.SpectralCube.read('data/test_cube_22.fits')[:-1]
+    stack = CubeStack(cube11, cube22, noise=0.320)
+    lnZ_thresh = 16.1  # log10 -> 7 ... approx 4 sigma
+    store_name = 'run/test_cube_multin'
+    utrans = PriorTransformer(vsys=81.5)
+    fit_cube(stack, utrans, store_name=store_name, nproc=8)
+
+
+def parse_results_to_cube(store_name, header):
+    header = header.copy()
+    n_lat = header['NAXIS1']
+    n_lon = header['NAXIS2']
+    pardata = np.empty((n_lat, n_lon))
+    pardata[:,:] = np.nan
+    if not store_name.endswith('.hdf5'):
+        filen = store_name + '.hdf5'
+    with h5py.File(filen, 'r') as hdf:
+        for i_lat in range(n_lat):
+            for i_lon in range(n_lon):
+                group_name = f'pix_{i_lon}_{i_lat}'
+                nbest = hdf[group_name].attrs['nbest']
+                if nbest == 0:
+                    continue
+                #group = hdf[f'{group_name}/{nbest}']
+                #post = group['posteriors']
+                #ncolsum = np.nan
+                #if nbest == 1:
+                #    v1 = post[:,3]
+                #    ncolsum = np.median(v1)
+                #elif nbest == 2:
+                #    v1 = post[:,6]
+                #    v2 = post[:,7]
+                #    vals = np.log10(10**v1 + 10**v2)
+                #    ncolsum = np.median(vals)
+                group = hdf[f'{group_name}/2']
+                post = group['posteriors']
+                ncolsum = np.nan
+                v1 = post[:,6]
+                v2 = post[:,7]
+                vals = np.log10(10**v1 + 10**v2)
+                ncolsum = np.median(vals)
+                pardata[i_lat,i_lon] = ncolsum
+    hdu = fits.PrimaryHDU(pardata)
+    hdu.writeto(f'{store_name}_ncolsum.fits')
 
 

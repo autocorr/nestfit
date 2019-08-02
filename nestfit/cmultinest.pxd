@@ -1,6 +1,6 @@
 #cython: language_level=3
 
-cdef extern from "multinest.h":
+cdef extern from 'multinest.h':
     void run(
             bint IS,
             bint mmodal,
@@ -24,9 +24,9 @@ cdef extern from "multinest.h":
             double logZero,
             int maxiter,
             void (*LogLike)(
-                double*, int*, int*, double*, void*),
+                double *, int *, int *, double *, void *),
             void (*dumper)(
-                int*, int*, int*, double**, double**, double**, double*,
-                double*, double*, double*, void*),
-            void* context,
+                int *, int *, int *, double **, double **, double **, double *,
+                double *, double *, double *, void *),
+            void *context,
     )

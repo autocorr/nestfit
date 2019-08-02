@@ -5,11 +5,19 @@
 #cython: initializedcheck=False
 
 cimport cython
-from libc.math cimport (M_PI, abs as c_abs, exp as c_exp, sqrt as c_sqrt)
 
 import numpy as np
 import scipy as sp
 cimport numpy as np
+
+from nestfit.cmultinest cimport run as c_run_multinest
+
+
+cdef extern from 'math.h' nogil:
+    const double M_PI
+    double c_abs 'abs' (double)
+    double c_exp 'exp' (double)
+    double c_sqrt 'sqrt' (double)
 
 
 # NOTE These "DEF" constants will be in-lined with their value wherever they
@@ -35,9 +43,9 @@ DEF EA22 = 2.291e-7        #64*!pi**4/(3*h*c**3)*nu22**3*mu0**2*(2/3.)
 DEF CKMS = 299792.458      # km/s
 DEF CCMS = 29979245800.0   # cm/s
 
-# Planck's constant in CGS
-DEF H    = 6.62607004e-27  # erg s
-DEF KB   = 1.38064852e-16  # erg/K
+# Other physical constants in CGS
+DEF H    = 6.62607004e-27  # erg s, Planck's constant
+DEF KB   = 1.38064852e-16  # erg/K, Boltzmann's constant
 DEF TCMB = 2.7315          # K, T(CMB) from pyspeckit
 
 # Levels to calculate the partition function over
@@ -102,15 +110,15 @@ TAU_WTS22[:] = [
 ]
 
 
-cdef inline double square(double x):
+cdef inline double square(double x) nogil:
     return x * x
 
 
-cdef void c_amm11_predict(double[:] xarr, double[:] spec, double[:] params):
+cdef void c_amm11_predict(double[::1] xarr, double[::1] spec, double[::1] params) nogil:
     cdef:
         int i, j, k
-        int size = xarr.size
-        int ncomp = params.size // 5
+        int size = xarr.shape[0]
+        int ncomp = params.shape[0] // 5
         double trot, tex, ntot, sigm, voff
         double Z11, Qtot, pop_rotstate, expterm, fracterm, widthterm, tau_main
         double hf_freq, hf_width, hf_offset, nu, T0, tau_hf_sum, tau_exp
@@ -172,11 +180,11 @@ cdef void c_amm11_predict(double[:] xarr, double[:] spec, double[:] params):
             )
 
 
-cdef void c_amm22_predict(double[:] xarr, double[:] spec, double[:] params):
+cdef void c_amm22_predict(double[::1] xarr, double[::1] spec, double[::1] params) nogil:
     cdef:
         int i, j, k
-        int size = xarr.size
-        int ncomp = params.size // 5
+        int size = xarr.shape[0]
+        int ncomp = params.shape[0] // 5
         double trot, tex, ntot, sigm, voff
         double Z22, Qtot, pop_rotstate, expterm, fracterm, widthterm, tau_main
         double hf_freq, hf_width, hf_offset, nu, T0, tau_hf_sum, tau_exp
@@ -238,11 +246,11 @@ cdef void c_amm22_predict(double[:] xarr, double[:] spec, double[:] params):
             )
 
 
-cpdef void amm11_predict(double[:] xarr, double[:] spec, double[:] params):
+cpdef void amm11_predict(double[::1] xarr, double[::1] spec, double[::1] params):
     c_amm11_predict(xarr, spec, params)
 
 
-cpdef void amm22_predict(double[:] xarr, double[:] spec, double[:] params):
+cpdef void amm22_predict(double[::1] xarr, double[::1] spec, double[::1] params):
     c_amm22_predict(xarr, spec, params)
 
 
@@ -250,7 +258,7 @@ cdef class PriorTransformer:
     cdef:
         int size
         double dx, vsys
-        double[:] y_trot, y_tex, y_ntot, y_sigm, y_voff
+        double[::1] y_trot, y_tex, y_ntot, y_sigm, y_voff
 
     def __init__(self, int size=100, double vsys=0.0):
         """
@@ -287,7 +295,7 @@ cdef class PriorTransformer:
         self.y_ntot =  5.00 * dist_ntot.ppf(x) + 12.00
         self.y_sigm =  2.00 * dist_sigm.ppf(x)
 
-    cdef double _interp(self, double u, double[:] data):
+    cdef double _interp(self, double u, double[::1] data) nogil:
         # FIXME may read out of bounds if `data` does not have same shape
         # as `self.size`.
         cdef:
@@ -301,7 +309,7 @@ cdef class PriorTransformer:
         slope = (y_hi - y_lo) / self.dx
         return slope * (u - x_lo) + y_lo
 
-    cpdef void transform(self, double[:] utheta, int n):
+    cpdef void transform(self, double[::1] utheta, int n):
         # FIXME may do unsafe writes if `utheta` does not have the same size
         # as the number of components `n`.
         cdef:
@@ -328,20 +336,62 @@ cdef class PriorTransformer:
             utheta[i] = self._interp(utheta[i], self.y_sigm)
 
 
-cdef class AmmoniaRunner:
+cdef class AmmoniaSpectrum:
     cdef:
-        list spectra
-        double[:] xarr11, xarr22, data11, data22, pred11, pred22
+        int size
+        double noise, prefactor, null_lnZ
+        double[::1] xarr, data, pred
+
+    def __init__(self, object psk_spec, double noise):
+        """
+        Parameters
+        ----------
+        psk_spec : `pyspeckit.Spectrum`
+        noise : number
+            The baseline RMS noise level in K (brightness temperature).
+        """
+        assert noise > 0
+        self.noise = noise
+        self.xarr = psk_spec.xarr.as_unit('Hz').value.copy()
+        self.data = psk_spec.data.data.copy()
+        self.pred = np.zeros_like(self.xarr)
+        self.size = psk_spec.shape[0]
+        self.prefactor = -self.size / 2 * np.log(2 * np.pi * noise**2)
+        self.null_lnZ = self.loglikelihood()
+        if self.xarr.shape[0] != self.data.shape[0]:
+            raise ValueError(
+                    'xarr and data must be the same size: '
+                    f'{self.xarr.shape[0]}, {self.data.shape[0]}'
+            )
+
+    cdef double loglikelihood(self) nogil:
+        cdef:
+            int i
+            double lnL = 0.0
+        for i in range(self.size):
+            lnL += square(self.data[i] - self.pred[i])
+        return self.prefactor - lnL / (2 * square(self.noise))
+
+
+cdef class Runner:
+    cpdef double loglikelihood(self, object utheta, int ndim, int n_params):
+        return 0.0
+
+
+cdef class AmmoniaRunner(Runner):
+    cdef:
         PriorTransformer utrans
+        AmmoniaSpectrum s11, s22
+        object array_type
     cdef readonly:
-        int ncomp, n_params, n_chan_tot
+        int ncomp, n_params, ndim, n_chan_tot
         double null_lnZ
 
     def __init__(self, spectra, utrans, ncomp=1):
         """
         Parameters
         ----------
-        spectra : iterable
+        spectra : iterable(`AmmoniaSpectrum`)
             List of spectrum wrapper objects
         utrans : `PriorTransformer`
             Prior transformer class that samples the prior from the unit cube
@@ -355,44 +405,104 @@ cdef class AmmoniaRunner:
             Natural log evidence for the "null model" of a constant equal to
             zero.
         """
-        self.spectra = spectra
+        self.s11 = spectra[0]
+        self.s22 = spectra[1]
         self.utrans = utrans
         self.ncomp = ncomp
         self.n_params = 5 * ncomp
-        self.xarr11 = spectra[0].xarr.value.copy()
-        self.xarr22 = spectra[1].xarr.value.copy()
-        self.data11 = spectra[0].data.copy()
-        self.data22 = spectra[1].data.copy()
-        self.pred11 = np.empty_like(self.xarr11)
-        self.pred22 = np.empty_like(self.xarr22)
-        self.null_lnZ = np.sum([s.null_lnZ for s in self.spectra])
-        self.n_chan_tot = self.xarr11.size + self.xarr22.size
-        if self.xarr11.size != self.data11.size:
-            raise ValueError(
-                    'xarr and data for (1,1) must be the same size: '
-                    f'{self.xarr11.size}, {self.data11.size}'
-            )
-        if self.xarr22.size != self.data22.size:
-            raise ValueError(
-                    'xarr and data for (2,2) must be the same size: '
-                    f'{self.xarr22.size}, {self.data22.size}'
-            )
+        self.ndim = self.n_params
+        self.null_lnZ = self.s11.null_lnZ + self.s22.null_lnZ
+        self.n_chan_tot = self.s11.size + self.s22.size
 
     cpdef double loglikelihood(self, object utheta, int ndim, int n_params):
         cdef:
-            double lnL11, lnL22
-            double[:] params
+            double lnL
+            double[::1] params
         params = np.ctypeslib.as_array(utheta, shape=(n_params,))
         self.utrans.transform(params, self.ncomp)
-        c_amm11_predict(self.xarr11, self.pred11, params)
-        c_amm22_predict(self.xarr22, self.pred22, params)
-        lnL11, lnL22 = 0.0, 0.0
-        for i in range(self.data11.size):
-            lnL11 += square(self.data11[i] - self.pred11[i])
-        for i in range(self.data22.size):
-            lnL22 += square(self.data22[i] - self.pred22[i])
-        lnL11 = self.spectra[0].loglikelihood(lnL11)
-        lnL22 = self.spectra[1].loglikelihood(lnL22)
-        return lnL11 + lnL22
+        c_amm11_predict(self.s11.xarr, self.s11.pred, params)
+        c_amm22_predict(self.s22.xarr, self.s22.pred, params)
+        lnL = self.s11.loglikelihood() + self.s22.loglikelihood()
+        return lnL
+
+
+cdef void _void_context() nogil:
+    pass
+
+
+#def run_multinest(
+#        Runner runner, Dumper dumper,
+#        IS=False, mmodal=True, ceff=False, nlive=400,
+#        tol=0.5, efr=0.3, nClsPar=None, maxModes=100, updInt=10, Ztol=-1e90,
+#        root='results', seed=-1, pWrap=None, fb=False, resume=False,
+#        initMPI=False, outfile=False, logZero=-1e100, maxiter=0):
+#    """
+#    Call the MultiNest `run` function.
+#
+#    Parameters
+#    ----------
+#    runner : `Runner`
+#    dumper : `Dumper`
+#    IS : bool, default False
+#        Perform Importance Nested Sampling? If set to True, multi-modal
+#        (`mmodal`) sampling will be set to False within MultiNest.
+#    mmodal : bool, default True
+#        Perform mode separation?
+#    ceff : bool, default False
+#        Run in constant efficiency mode?
+#    nlive : int, default 400
+#        Number of live points.
+#    tol : float, default 0.5
+#        Evidence tolerance factor.
+#    efr : float, default 0.3
+#        Sampling efficiency.
+#    nClsPar : int, default None
+#        Number of parameters to perform the clustering over. If `None` then
+#        the clustering will be performed over all of the parameters. If a
+#        smaller number than the total is chosen, then the first such
+#        parameters will be used for the clustering.
+#    maxModes : int
+#        The maximum number of modes.
+#    updInt : int
+#    Ztol : float, default -1e90
+#    seed : int, default -1
+#        Seed for the random number generator. The default value of -1 will
+#        set the seed from the system time.
+#    fb : bool, default False
+#    """
+#    cdef:
+#        char[1000] basename
+#    # make local C copy of output basename to avoid garbage collection
+#    basename[:len(root)] = root.encode()
+#    if nClsPar is None:
+#        nClsPar = runner.n_params
+#    if nClsPar > runner.n_params:
+#        raise ValueError('Number of clustering parameters must be less than total.')
+#    c_run_multinest(
+#        <bint> IS,
+#        <bint> mmodal,
+#        <bint> ceff,
+#        <int> nlive,
+#        <double> tol,
+#        <double> efr,
+#        <int> runner.ndim,
+#        <int> runner.n_params,
+#        <int> nClsPar,
+#        <int> maxModes,
+#        <int> updInt,
+#        <double> Ztol,
+#        basename,  # root
+#        <int> seed,
+#        &pWrap,
+#        <bint> fb,
+#        <bint> resume,
+#        <bint> outfile,
+#        <bint> initMPI,
+#        <double> logZero,
+#        <int> maxiter,
+#        &runner.loglike,
+#        &dumper.dump,
+#        &_void_context,
+#    )
 
 

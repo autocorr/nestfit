@@ -1,0 +1,9 @@
+numpy
+scipy
+pandas
+matplotlib
+h5py
+astropy
+pyspeckit
+spectral_cube
+corner
