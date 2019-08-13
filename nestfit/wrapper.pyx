@@ -257,10 +257,10 @@ cpdef void amm22_predict(double[::1] xarr, double[::1] spec, double[::1] params)
 cdef class PriorTransformer:
     cdef:
         int size
-        double dx, vsys
+        double dx, vsys, vmin, vmax
         double[::1] y_trot, y_tex, y_ntot, y_sigm, y_voff
 
-    def __init__(self, int size=100, double vsys=0.0):
+    def __init__(self, int size=500, double vsys=0.0):
         """
         Evaluate the inverse cumulative prior functions and interpolate them
         using an equally spaced sampling along the x-axis. Values are linearly
@@ -277,7 +277,11 @@ cdef class PriorTransformer:
         self.dx = 1 / <double>(size)
         self.vsys = vsys
         # prior distributions
-        x = np.linspace(0, 1-self.dx, size)
+        # NOTE gamma distributions evaluate to inf at 1, so only evaluate
+        # functions up to 1-epsilon. For the beta distribution ppf, 1-epsilon
+        # evaluates to 0.999045 .
+        epsilon = 1e-13
+        x = np.linspace(0, 1-epsilon, size)
         dist_voff = sp.stats.beta(5.0, 5.0)
         dist_trot = sp.stats.gamma(4.4, scale=0.070)
         dist_tex  = sp.stats.beta(1.0, 2.5)
@@ -294,6 +298,8 @@ cdef class PriorTransformer:
         self.y_tex  =  9.26 * dist_tex.ppf(x)  +  2.74
         self.y_ntot =  5.00 * dist_ntot.ppf(x) + 12.00
         self.y_sigm =  2.00 * dist_sigm.ppf(x)
+        self.vmin = np.min(self.y_voff)
+        self.vmax = np.max(self.y_voff)
 
     cdef double _interp(self, double u, double[::1] data) nogil:
         # FIXME may read out of bounds if `data` does not have same shape
