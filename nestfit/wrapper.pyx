@@ -6,9 +6,12 @@
 
 cimport cython
 
-import numpy as np
+import h5py
 import scipy as sp
+
+import numpy as np
 cimport numpy as np
+np.import_array()
 
 from nestfit.cmultinest cimport run as c_run_multinest
 
@@ -114,15 +117,19 @@ cdef inline double square(double x) nogil:
     return x * x
 
 
-cdef void c_amm11_predict(double[::1] xarr, double[::1] spec, double[::1] params) nogil:
+# NOTE while it does appear wasteful to do all of these stack allocations on
+# each call, it results in an insignificant performance penalty compared to
+# passing a struct containing `hf_` arrays.
+cdef void c_amm11_predict(double[::1] xarr, double[::1] spec, double *params,
+        int ndim) nogil:
     cdef:
         int i, j, k
         int size = xarr.shape[0]
-        int ncomp = params.shape[0] // 5
+        int ncomp = ndim // 5
         double trot, tex, ntot, sigm, voff
         double Z11, Qtot, pop_rotstate, expterm, fracterm, widthterm, tau_main
-        double hf_freq, hf_width, hf_offset, nu, T0, tau_hf_sum, tau_exp
-        double tau_hf[NHF11]
+        double hf_freq, hf_width, hf_offset, nu, T0, hf_tau_sum, tau_exp
+        double hf_tau[NHF11]
         double hf_nucen[NHF11]
         double hf_inv_denom[NHF11]
     spec[:] = 0
@@ -158,7 +165,7 @@ cdef void c_amm11_predict(double[::1] xarr, double[::1] spec, double[::1] params
             hf_width    = c_abs(sigm / CKMS * hf_freq)
             hf_offset   = voff / CKMS * hf_freq
             hf_nucen[j] = hf_offset - hf_freq
-            tau_hf[j]   = tau_main * TAU_WTS11[j]
+            hf_tau[j]   = tau_main * TAU_WTS11[j]
             hf_inv_denom[j] = 1 / (2.0 * square(hf_width))
         # For each channel in the spectrum compute the summed optical depth
         # over all of the hyperfine lines and then convert it to temperature
@@ -166,29 +173,30 @@ cdef void c_amm11_predict(double[::1] xarr, double[::1] spec, double[::1] params
         for j in range(size):
             nu = xarr[j]
             T0 = H * nu / KB
-            tau_hf_sum = 0.0
+            hf_tau_sum = 0.0
             # Approximation to not include the contributions from Gaussian
             # components that are more than exp(-20) (4e-8) away from the HF
             # line center.
             for k in range(NHF11):
                 tau_exp = square(nu + hf_nucen[k]) * hf_inv_denom[k]
                 if tau_exp < 20:
-                    tau_hf_sum += tau_hf[k] * c_exp(-tau_exp)
+                    hf_tau_sum += hf_tau[k] * c_exp(-tau_exp)
             spec[j] += (
                 (T0 / (c_exp(T0 / tex) - 1) - T0 / (c_exp(T0 / TCMB) - 1))
-                * (1 - c_exp(-tau_hf_sum))
+                * (1 - c_exp(-hf_tau_sum))
             )
 
 
-cdef void c_amm22_predict(double[::1] xarr, double[::1] spec, double[::1] params) nogil:
+cdef void c_amm22_predict(double[::1] xarr, double[::1] spec, double *params,
+        int ndim) nogil:
     cdef:
         int i, j, k
         int size = xarr.shape[0]
-        int ncomp = params.shape[0] // 5
+        int ncomp = ndim // 5
         double trot, tex, ntot, sigm, voff
         double Z22, Qtot, pop_rotstate, expterm, fracterm, widthterm, tau_main
-        double hf_freq, hf_width, hf_offset, nu, T0, tau_hf_sum, tau_exp
-        double tau_hf[NHF22]
+        double hf_freq, hf_width, hf_offset, nu, T0, hf_tau_sum, tau_exp
+        double hf_tau[NHF22]
         double hf_nucen[NHF22]
         double hf_inv_denom[NHF22]
     spec[:] = 0
@@ -224,7 +232,7 @@ cdef void c_amm22_predict(double[::1] xarr, double[::1] spec, double[::1] params
             hf_width    = c_abs(sigm / CKMS * hf_freq)
             hf_offset   = voff / CKMS * hf_freq
             hf_nucen[j] = hf_offset - hf_freq
-            tau_hf[j]   = tau_main * TAU_WTS22[j]
+            hf_tau[j]   = tau_main * TAU_WTS22[j]
             hf_inv_denom[j] = 1 / (2.0 * square(hf_width))
         # For each channel in the spectrum compute the summed optical depth
         # over all of hte hyperfine lines and then convert it to temperature
@@ -232,26 +240,26 @@ cdef void c_amm22_predict(double[::1] xarr, double[::1] spec, double[::1] params
         for j in range(size):
             nu = xarr[j]
             T0 = H * nu / KB
-            tau_hf_sum = 0.0
+            hf_tau_sum = 0.0
             # Approximation to not include the contributions from Gaussian
             # components that are more than exp(-20) (4e-8) away from the HF
             # line center.
             for k in range(NHF22):
                 tau_exp = square(nu + hf_nucen[k]) * hf_inv_denom[k]
                 if tau_exp < 20:
-                    tau_hf_sum += tau_hf[k] * c_exp(-tau_exp)
+                    hf_tau_sum += hf_tau[k] * c_exp(-tau_exp)
             spec[j] += (
                 (T0 / (c_exp(T0 / tex) - 1) - T0 / (c_exp(T0 / TCMB) - 1))
-                * (1 - c_exp(-tau_hf_sum))
+                * (1 - c_exp(-hf_tau_sum))
             )
 
 
 cpdef void amm11_predict(double[::1] xarr, double[::1] spec, double[::1] params):
-    c_amm11_predict(xarr, spec, params)
+    c_amm11_predict(xarr, spec, &params[0], params.shape[0])
 
 
 cpdef void amm22_predict(double[::1] xarr, double[::1] spec, double[::1] params):
-    c_amm22_predict(xarr, spec, params)
+    c_amm22_predict(xarr, spec, &params[0], params.shape[0])
 
 
 cdef class PriorTransformer:
@@ -315,9 +323,17 @@ cdef class PriorTransformer:
         slope = (y_hi - y_lo) / self.dx
         return slope * (u - x_lo) + y_lo
 
-    cpdef void transform(self, double[::1] utheta, int n):
-        # FIXME may do unsafe writes if `utheta` does not have the same size
-        # as the number of components `n`.
+    cdef void transform(self, double *utheta, int n) nogil:
+        """
+        Parameters
+        ----------
+        utheta : double*
+            Pointer to parameter cube.
+        n : int
+            Number of components. `utheta` should have dimension [5*n].
+        """
+        # FIXME may do unsafe writes if `utheta` does not have the same
+        # size as the number of components `n`.
         cdef:
             int i
             double u, umin, umax
@@ -383,12 +399,14 @@ cdef class Runner:
     cpdef double loglikelihood(self, object utheta, int ndim, int n_params):
         return 0.0
 
+    cdef void c_loglikelihood(self, double *utheta, double *lnL):
+        pass
+
 
 cdef class AmmoniaRunner(Runner):
     cdef:
         PriorTransformer utrans
         AmmoniaSpectrum s11, s22
-        object array_type
     cdef readonly:
         int ncomp, n_params, ndim, n_chan_tot
         double null_lnZ
@@ -425,90 +443,282 @@ cdef class AmmoniaRunner(Runner):
             double lnL
             double[::1] params
         params = np.ctypeslib.as_array(utheta, shape=(n_params,))
-        self.utrans.transform(params, self.ncomp)
-        c_amm11_predict(self.s11.xarr, self.s11.pred, params)
-        c_amm22_predict(self.s22.xarr, self.s22.pred, params)
+        self.utrans.transform(&params[0], self.ncomp)
+        c_amm11_predict(self.s11.xarr, self.s11.pred, &params[0], self.ndim)
+        c_amm22_predict(self.s22.xarr, self.s22.pred, &params[0], self.ndim)
         lnL = self.s11.loglikelihood() + self.s22.loglikelihood()
         return lnL
 
+    cdef void c_loglikelihood(self, double *utheta, double *lnL):
+        self.utrans.transform(utheta, self.ncomp)
+        c_amm11_predict(self.s11.xarr, self.s11.pred, utheta, self.ndim)
+        c_amm22_predict(self.s22.xarr, self.s22.pred, utheta, self.ndim)
+        lnL[0] = self.s11.loglikelihood() + self.s22.loglikelihood()
 
-cdef void _void_context() nogil:
-    pass
+
+def check_hdf5_ext(store_name):
+    if store_name.endswith('.hdf5'):
+        return store_name
+    else:
+        return f'{store_name}.hdf5'
 
 
-#def run_multinest(
-#        Runner runner, Dumper dumper,
-#        IS=False, mmodal=True, ceff=False, nlive=400,
-#        tol=0.5, efr=0.3, nClsPar=None, maxModes=100, updInt=10, Ztol=-1e90,
-#        root='results', seed=-1, pWrap=None, fb=False, resume=False,
-#        initMPI=False, outfile=False, logZero=-1e100, maxiter=0):
-#    """
-#    Call the MultiNest `run` function.
-#
-#    Parameters
-#    ----------
-#    runner : `Runner`
-#    dumper : `Dumper`
-#    IS : bool, default False
-#        Perform Importance Nested Sampling? If set to True, multi-modal
-#        (`mmodal`) sampling will be set to False within MultiNest.
-#    mmodal : bool, default True
-#        Perform mode separation?
-#    ceff : bool, default False
-#        Run in constant efficiency mode?
-#    nlive : int, default 400
-#        Number of live points.
-#    tol : float, default 0.5
-#        Evidence tolerance factor.
-#    efr : float, default 0.3
-#        Sampling efficiency.
-#    nClsPar : int, default None
-#        Number of parameters to perform the clustering over. If `None` then
-#        the clustering will be performed over all of the parameters. If a
-#        smaller number than the total is chosen, then the first such
-#        parameters will be used for the clustering.
-#    maxModes : int
-#        The maximum number of modes.
-#    updInt : int
-#    Ztol : float, default -1e90
-#    seed : int, default -1
-#        Seed for the random number generator. The default value of -1 will
-#        set the seed from the system time.
-#    fb : bool, default False
-#    """
-#    cdef:
-#        char[1000] basename
-#    # make local C copy of output basename to avoid garbage collection
-#    basename[:len(root)] = root.encode()
-#    if nClsPar is None:
-#        nClsPar = runner.n_params
-#    if nClsPar > runner.n_params:
-#        raise ValueError('Number of clustering parameters must be less than total.')
-#    c_run_multinest(
-#        <bint> IS,
-#        <bint> mmodal,
-#        <bint> ceff,
-#        <int> nlive,
-#        <double> tol,
-#        <double> efr,
-#        <int> runner.ndim,
-#        <int> runner.n_params,
-#        <int> nClsPar,
-#        <int> maxModes,
-#        <int> updInt,
-#        <double> Ztol,
-#        basename,  # root
-#        <int> seed,
-#        &pWrap,
-#        <bint> fb,
-#        <bint> resume,
-#        <bint> outfile,
-#        <bint> initMPI,
-#        <double> logZero,
-#        <int> maxiter,
-#        &runner.loglike,
-#        &dumper.dump,
-#        &_void_context,
-#    )
+cdef class Dumper:
+    cdef:
+        str group_name, store_name
+        bint no_dump
+        int n_calls, n_samples
+        double max_loglike
+        double[::1] quantiles
+        list marginal_cols
+
+    def __init__(self, group_name, store_name='results', no_dump=False):
+        self.group_name = group_name
+        self.store_name = check_hdf5_ext(store_name)
+        self.no_dump = no_dump
+        self.n_calls = 0
+        self.n_samples = -1
+        self.max_loglike = 0.0
+        self.quantiles = np.array([
+            0.00, 0.01, 0.10, 0.25, 0.50, 0.75, 0.90, 0.99, 1.00,
+            1.58655254e-1, 0.84134475,  # 1-sigma credible interval
+            2.27501319e-2, 0.97724987,  # 2-sigma credible interval
+            1.34989803e-3, 0.99865010,  # 3-sigma credible interval
+        ])
+        self.marginal_cols = [
+            'min', 'p01', 'p10', 'p25', 'p50', 'p75', 'p90', 'p99', 'max',
+            '1s_lo', '1s_hi', '2s_lo', '2s_hi', '3s_lo', '3s_hi',
+        ]
+
+    def calc_marginals(self, posteriors):
+        # The last two columns of the posterior array are -2*lnL and X*L/Z
+        return np.quantile(posteriors[:,:-2], self.quantiles, axis=0)
+
+    def write_info_criteria(self, maxL, runner):
+        with h5py.File(self.store_name, 'a') as hdf:
+            group = hdf[self.group_name]
+            group.attrs['ncomp']      = runner.ncomp
+            group.attrs['null_lnZ']   = runner.null_lnZ
+            group.attrs['n_chan_tot'] = runner.n_chan_tot
+            n = runner.n_chan_tot
+            k = runner.n_params
+            bic  = np.log(n) * k - 2 * maxL
+            aic  = 2 * k - 2 * maxL
+            aicc = aic + (2 * k**2 + 2 * k) / (n - k - 1)
+            group.attrs['BIC']  = bic
+            group.attrs['AIC']  = aic
+            group.attrs['AICc'] = aicc
+
+    def append_attributes(self, **kwargs):
+        with h5py.File(self.store_name, 'a') as hdf:
+            group = hdf[self.group_name]
+            for name, value in kwargs.items():
+                group.attrs[name] = value
+
+    def append_datasets(self, **kwargs):
+        with h5py.File(self.store_name, 'a') as hdf:
+            group = hdf[self.group_name]
+            for name, data in kwargs.items():
+                group.create_dataset(name, data=data)
+
+
+cdef class Context:
+    cdef:
+        Runner runner
+        Dumper dumper
+
+    def __init__(self, Runner runner, Dumper dumper):
+        self.runner = runner
+        self.dumper = dumper
+
+
+cdef void mn_loglikelihood(double *utheta, int *ndim, int *n_params,
+        double *lnL, void *context):
+    cdef:
+        Runner runner = (<Context> context).runner
+    runner.c_loglikelihood(utheta, lnL)
+    #(<Context> context).runner.c_loglikelihood(utheta, lnL)
+
+
+cdef void mn_dump(int *n_samples, int *n_live, int *n_params,
+            double **phys_live, double **posterior, double **param_constr,
+            double *max_loglike, double *lnZ, double *ins_lnZ,
+            double *lnZ_err, void *context):
+    # NOTE all multi-dimensional arrays have Fortran stride
+    cdef:
+        Dumper dumper = (<Context> context).dumper
+        Runner runner = (<Context> context).runner
+    dumper.n_calls += 1
+    # The last two iterations will have the same number of samples, so
+    # only write out the values on the last iteration.
+    if dumper.n_samples != n_samples[0]:
+        dumper.n_samples = n_samples[0]
+        return
+    if dumper.no_dump:
+        return
+    # Final call, write out parameters to HDF5 file.
+    #dumper.max_loglike = max_loglike[0]
+    with h5py.File(dumper.store_name, 'a') as hdf:
+        group = hdf.create_group(dumper.group_name)
+        # run and spectrum atttributes
+        group.attrs['ncomp']      = runner.ncomp
+        group.attrs['null_lnZ']   = runner.null_lnZ
+        group.attrs['n_chan_tot'] = runner.n_chan_tot
+        # nested sampling attributes:
+        group.attrs['n_samples']      = n_samples[0]
+        group.attrs['n_live']         = n_live[0]
+        group.attrs['n_params']       = n_params[0]
+        group.attrs['global_lnZ']     = lnZ[0]
+        group.attrs['global_lnZ_err'] = lnZ_err[0]
+        group.attrs['max_loglike']    = max_loglike[0]
+        group.attrs['marginal_cols']  = dumper.marginal_cols
+        # information criteria
+        n = runner.n_chan_tot
+        k = runner.n_params
+        maxL = max_loglike[0]
+        bic  = np.log(n) * k - 2 * maxL
+        aic  = 2 * k - 2 * maxL
+        aicc = aic + (2 * k**2 + 2 * k) / (n - k - 1)
+        group.attrs['BIC']  = bic
+        group.attrs['AIC']  = aic
+        group.attrs['AICc'] = aicc
+        # posterior samples
+        post_shape = (n_samples[0], n_params[0]+2)
+        post_arr = mn_dptr_to_ndarray(posterior, post_shape)
+        group.create_dataset('posteriors', data=post_arr)
+        group.create_dataset('marginals', data=dumper.calc_marginals(post_arr))
+        # posterior statistics
+        pcon_shape = (1, 4*n_params[0])
+        pcon_arr = mn_dptr_to_ndarray(param_constr, pcon_shape)
+        pcon_arr = pcon_arr.reshape(4, n_params[0])
+        group.create_dataset('bestfit_params', data=pcon_arr[2])
+        group.create_dataset('map_params', data=pcon_arr[3])
+
+
+cdef np.ndarray mn_dptr_to_ndarray(double **data, tuple shape):
+    """
+    Create a numpy array view of the memory pointed to by MultiNest.  The numpy
+    C-API is used to construct a ndarray directly with attributes appropriate
+    for the `posterior` and `param_constr` data (2D, Fortran-ordered,
+    double/float64). Note that the memory mapped by these views will be freed
+    when MultiNest returns.
+
+    Information on the calling convention for `np.PyArray_New` were found here:
+        https://gist.github.com/jdfr/688507524b6b4163e4c0
+    See also:
+        https://gist.github.com/GaelVaroquaux/1249305
+    """
+    cdef:
+        np.ndarray array
+        np.npy_intp dims[2]
+    dims[0] = <np.npy_intp> shape[0]
+    dims[1] = <np.npy_intp> shape[1]
+    # Parameters select for Fortran-ordered contiguous data through:
+    #   strides NULL
+    #   data non-zero non-NULL
+    #   (flags & NPY_ARRAY_F_CONTIGUOUS) non-zero non-NULL
+    array = np.PyArray_New(
+            np.ndarray,          # subtype; not quite sure why this works
+            2,                   # nd; number of dimensions
+            dims,                # dims; array size for each dimensions
+            np.NPY_DOUBLE,       # type_num; data type for C double
+            NULL,                # strides; array of stride lengths
+            data[0],             # data; pointer to data
+            0,                   # itemsize; ignored for type of fixed size
+            np.NPY_ARRAY_FARRAY, # flags; bit mask for array flags
+            <object>NULL,        # obj; used for ndarray subtypes
+    )
+    # NOTE a reference count may need to be incremented here
+    return array
+
+
+def run_multinest(
+        Runner runner, Dumper dumper,
+        IS=False, mmodal=True, ceff=False, nlive=400,
+        tol=0.5, efr=0.3, nClsPar=None, maxModes=100, updInt=10, Ztol=-1e90,
+        root='results', seed=-1, pWrap=None, fb=False, resume=False,
+        initMPI=False, outfile=False, logZero=-1e100, maxiter=0):
+    """
+    Call the MultiNest `run` function. The `runner` and `dumper` classes wrap
+    methods to perform the prior transformation, likelihood function call, and
+    outfile creation.
+
+    Parameters
+    ----------
+    runner : `Runner`
+    dumper : `Dumper`
+    IS : bool, default False
+        Perform Importance Nested Sampling? If set to True, multi-modal
+        (`mmodal`) sampling will be set to False within MultiNest.
+    mmodal : bool, default True
+        Perform mode separation?
+    ceff : bool, default False
+        Run in constant efficiency mode?
+    nlive : int, default 400
+        Number of live points.
+    tol : float, default 0.5
+        Evidence tolerance factor.
+    efr : float, default 0.3
+        Sampling efficiency.
+    nClsPar : int, default None
+        Number of parameters to perform the clustering over. If `None` then
+        the clustering will be performed over all of the parameters. If a
+        smaller number than the total is chosen, then the first such
+        parameters will be used for the clustering.
+    maxModes : int
+        The maximum number of modes.
+    updInt : int
+    Ztol : float, default -1e90
+    root : str, default 'results'
+        The basename for the output files. This has an internal limit of 1000
+        characters in MultiNest.
+    seed : int, default -1
+        Seed for the random number generator. The default value of -1 will
+        set the seed from the system time.
+    pWrap : iterable
+    fb : bool, default False
+    resume : bool, default False
+    initMPI : bool, default False
+    outfile : bool, default False
+    logZero : float, default -1e100
+    maxiter : int, default 0
+    """
+    cdef:
+        Context context = Context(runner, dumper)
+        int[:] pWrap_a = np.zeros(runner.n_params, dtype='i')
+        char root_c_arr[1000]
+    root_c_arr[:len(root)] = <bytes> root
+    if pWrap is not None:
+        pWrap_a[:] = np.array(pWrap, dtype='i')
+    if nClsPar is None:
+        nClsPar = runner.n_params
+    if nClsPar > runner.n_params:
+        raise ValueError('Number of clustering parameters must be less than total.')
+    c_run_multinest(
+        <bint> IS,
+        <bint> mmodal,
+        <bint> ceff,
+        <int> nlive,
+        <double> tol,
+        <double> efr,
+        <int> runner.ndim,
+        <int> runner.n_params,
+        <int> nClsPar,
+        <int> maxModes,
+        <int> updInt,
+        <double> Ztol,
+        root_c_arr,
+        <int> seed,
+        &pWrap_a[0],
+        <bint> fb,
+        <bint> resume,
+        <bint> outfile,
+        <bint> initMPI,
+        <double> logZero,
+        <int> maxiter,
+        &mn_loglikelihood,
+        &mn_dump,
+        <void *>context,
+    )
 
 

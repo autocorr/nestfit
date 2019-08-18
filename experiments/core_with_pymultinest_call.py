@@ -19,7 +19,8 @@ from astropy.io import fits
 from astropy import units as u
 
 from nestfit.wrapped import (amm11_predict, amm22_predict,
-        PriorTransformer, AmmoniaSpectrum, AmmoniaRunner)
+        PriorTransformer, AmmoniaSpectrum, AmmoniaRunner,
+        Dumper, run_multinest)
 
 
 class SyntheticSpectrum:
@@ -118,24 +119,24 @@ def get_test_spectra():
 
 
 def run_nested(runner, dumper, mn_kwargs=None):
-    if mn_kwargs is None:
-        mn_kwargs = {
-                #'n_clustering_params': runner.ncomp,
-                'outputfiles_basename': 'run/chain1-',
-                'importance_nested_sampling': False,
-                'multimodal': True,
-                #'const_efficiency_mode': True,
-                'n_live_points': 60,
-                'evidence_tolerance': 1.0,
-                'sampling_efficiency': 0.3,
-                'n_iter_before_update': 2000,
-                'verbose': False,
-                'resume': False,
-                'write_output': False,
-                'dump_callback': dumper.dump,
-        }
+    run_kwargs = {
+            #'n_clustering_params': runner.ncomp,
+            'outputfiles_basename': 'run/chain1-',
+            'importance_nested_sampling': False,
+            'multimodal': True,
+            #'const_efficiency_mode': True,
+            'n_live_points': 60,
+            'evidence_tolerance': 1.0,
+            'sampling_efficiency': 0.3,
+            'n_iter_before_update': 2000,
+            'verbose': False,
+            'resume': False,
+            'write_output': False,
+            'dump_callback': dumper.dump,
+    }
+    run_kwargs.update(mn_kwargs)
     pymultinest.run(
-            runner.loglikelihood, None, runner.n_params, **mn_kwargs
+            runner.loglikelihood, None, runner.n_params, **run_kwargs
     )
 
 
@@ -149,10 +150,27 @@ def test_nested(ncomp=2):
         for syn in synspec
     ]
     utrans = PriorTransformer()
-    dumper = HdfDumper(f'001/{ncomp}', store_name='test')
+    dumper = HdfDumper(f'001/{ncomp}', store_name='test', no_dump=True)
     runner = AmmoniaRunner(spectra, utrans, ncomp)
-    run_nested(runner, dumper)
-    dumper.write_hdf(runner=runner)
+    run_nested(runner, dumper, mn_kwargs={'seed': 5})
+    #dumper.write_hdf(runner=runner)
+    return synspec, spectra, runner
+
+
+def test_nested_cy(ncomp=2):
+    synspec = get_test_spectra()
+    spectra = [
+        AmmoniaSpectrum(
+            pyspeckit.Spectrum(
+                xarr=syn.xarr, data=syn.sampled_spec, header={}),
+            syn.noise)
+        for syn in synspec
+    ]
+    utrans = PriorTransformer()
+    dumper = Dumper(f'001/{ncomp}', store_name='test', no_dump=True)
+    runner = AmmoniaRunner(spectra, utrans, ncomp)
+    run_multinest(runner, dumper, nlive=60, seed=5, tol=1.0, efr=0.3,
+            updInt=2000)
     return synspec, spectra, runner
 
 
@@ -168,9 +186,10 @@ class HdfDumper:
         '1s_lo', '1s_hi', '2s_lo', '2s_hi', '3s_lo', '3s_hi',
     ]
 
-    def __init__(self, group_name, store_name='results'):
+    def __init__(self, group_name, store_name='results', no_dump=False):
         self.group_name = group_name
         self.store_name = check_hdf5_ext(store_name)
+        self.no_dump = no_dump
         # These attributes are written to by the method `dump`
         self.n_calls = 0
         self.n_samples = None
@@ -186,20 +205,21 @@ class HdfDumper:
         self.n_calls += 1
         # The last two iterations will have the same number of samples, so
         # only copy over the parameters on the last iteration.
-        if self.n_samples == n_samples:
-            self.n_samples   = n_samples
-            self.n_live      = n_live
-            self.n_params    = n_params
-            self.max_loglike = max_loglike
-            self.lnZ         = lnZ
-            self.lnZ_err     = lnZ_err
-            # NOTE These arrays must be copied because MultiNest will free
-            # the memory accessed by this view.
-            self.bestfit_params = param_constr[2].copy()
-            self.map_params  = param_constr[3].copy()
-            self.posteriors  = posteriors.copy()
-        else:
+        if self.n_samples != n_samples:
             self.n_samples = n_samples
+        if self.no_dump:
+            return
+        self.n_samples   = n_samples
+        self.n_live      = n_live
+        self.n_params    = n_params
+        self.max_loglike = max_loglike
+        self.lnZ         = lnZ
+        self.lnZ_err     = lnZ_err
+        # NOTE These arrays must be copied because MultiNest will free
+        # the memory accessed by this view.
+        self.bestfit_params = param_constr[2].copy()
+        self.map_params  = param_constr[3].copy()
+        self.posteriors  = posteriors.copy()
 
     def calc_marginals(self):
         # The last two columns of the posterior array are -2*lnL and X*L/Z

@@ -9,9 +9,7 @@ prep.).
 
 The Nested Sampling is performed using
 `MultiNest <https://github.com/farhanferoz/MultiNest/>`_
-written by Farhan Feroz and the Python wrapper
-`PyMultiNest <https://github.com/JohannesBuchner/PyMultiNest>`_
-written by Johannes Buchner.
+written by Farhan Feroz and wrapped directly with Cython.
 
 Nested Sampling
 ---------------
