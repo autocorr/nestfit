@@ -129,8 +129,9 @@ def test_nested(ncomp=2):
     utrans = PriorTransformer()
     dumper = Dumper(f'001/{ncomp}', store_name='test', no_dump=True)
     runner = AmmoniaRunner(spectra, utrans, ncomp)
-    run_multinest(runner, dumper, nlive=60, seed=5, tol=1.0, efr=0.3,
-            updInt=2000)
+    for _ in range(100):
+        run_multinest(runner, dumper, nlive=60, seed=5, tol=1.0, efr=0.3,
+                updInt=2000)
     return synspec, spectra, runner
 
 

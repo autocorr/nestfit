@@ -310,12 +310,10 @@ cdef class PriorTransformer:
         self.vmax = np.max(self.y_voff)
 
     cdef double _interp(self, double u, double[::1] data) nogil:
-        # FIXME may read out of bounds if `data` does not have same shape
-        # as `self.size`.
         cdef:
             int i_lo, i_hi
             double x_lo, y_lo, y_hi, slope
-        i_lo = <int>((self.size - 1) * u)
+        i_lo = <int>((data.shape[0] - 1) * u)
         i_hi = i_lo + 1
         x_lo = u - u % self.dx
         y_lo = data[i_lo]
@@ -429,6 +427,7 @@ cdef class AmmoniaRunner(Runner):
             Natural log evidence for the "null model" of a constant equal to
             zero.
         """
+        assert ncomp > 0
         self.s11 = spectra[0]
         self.s22 = spectra[1]
         self.utrans = utrans
@@ -519,10 +518,7 @@ cdef class Context:
 
 cdef void mn_loglikelihood(double *utheta, int *ndim, int *n_params,
         double *lnL, void *context):
-    cdef:
-        Runner runner = (<Context> context).runner
-    runner.c_loglikelihood(utheta, lnL)
-    #(<Context> context).runner.c_loglikelihood(utheta, lnL)
+    (<Context> context).runner.c_loglikelihood(utheta, lnL)
 
 
 cdef void mn_dump(int *n_samples, int *n_live, int *n_params,
@@ -668,6 +664,15 @@ def run_multinest(
     logZero : float, default -1e100
     maxiter : int, default 0
     """
+    assert runner.ndim > 0
+    assert nlive > 0
+    assert tol > 0
+    assert 0 < efr <= 1
+    assert maxModes > 0
+    assert updInt > 0
+    assert Ztol is not None and np.isfinite(Ztol)
+    assert logZero is not None and np.isfinite(logZero)
+    assert maxiter >= 0
     cdef:
         Context context = Context(runner, dumper)
         int[:] pWrap_a = np.zeros(runner.n_params, dtype='i')
