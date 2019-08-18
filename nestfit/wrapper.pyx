@@ -494,21 +494,6 @@ cdef class Dumper:
         # The last two columns of the posterior array are -2*lnL and X*L/Z
         return np.quantile(posteriors[:,:-2], self.quantiles, axis=0)
 
-    def write_info_criteria(self, maxL, runner):
-        with h5py.File(self.store_name, 'a') as hdf:
-            group = hdf[self.group_name]
-            group.attrs['ncomp']      = runner.ncomp
-            group.attrs['null_lnZ']   = runner.null_lnZ
-            group.attrs['n_chan_tot'] = runner.n_chan_tot
-            n = runner.n_chan_tot
-            k = runner.n_params
-            bic  = np.log(n) * k - 2 * maxL
-            aic  = 2 * k - 2 * maxL
-            aicc = aic + (2 * k**2 + 2 * k) / (n - k - 1)
-            group.attrs['BIC']  = bic
-            group.attrs['AIC']  = aic
-            group.attrs['AICc'] = aicc
-
     def append_attributes(self, **kwargs):
         with h5py.File(self.store_name, 'a') as hdf:
             group = hdf[self.group_name]
