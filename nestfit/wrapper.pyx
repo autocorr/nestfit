@@ -23,6 +23,14 @@ cdef extern from 'math.h' nogil:
     double c_sqrt 'sqrt' (double)
 
 
+cdef extern from 'fastexp.h' nogil:
+    double fast_expn 'FastExp' (const float)
+    void calcExpTableEntries(const int, const int)
+    void fillErfTable()
+calcExpTableEntries(3, 8)
+fillErfTable()
+
+
 # NOTE These "DEF" constants will be in-lined with their value wherever they
 # appear in the code at compilation time.
 
@@ -145,7 +153,7 @@ cdef void c_amm11_predict(double[::1] xarr, double[::1] spec, double *params,
         for j in range(NPARA):
             Qtot += (
                     (2 * JPARA[j] + 1)
-                    * c_exp(-H * (BROT * JPARA[j] * (JPARA[j] + 1)
+                    * fast_expn(H * (BROT * JPARA[j] * (JPARA[j] + 1)
                     + (CROT - BROT) * square(JPARA[j])) / (KB * trot))
             )
         # Calculate the main line optical depth
@@ -180,10 +188,10 @@ cdef void c_amm11_predict(double[::1] xarr, double[::1] spec, double *params,
             for k in range(NHF11):
                 tau_exp = square(nu + hf_nucen[k]) * hf_inv_denom[k]
                 if tau_exp < 20:
-                    hf_tau_sum += hf_tau[k] * c_exp(-tau_exp)
+                    hf_tau_sum += hf_tau[k] * fast_expn(tau_exp)
             spec[j] += (
-                (T0 / (c_exp(T0 / tex) - 1) - T0 / (c_exp(T0 / TCMB) - 1))
-                * (1 - c_exp(-hf_tau_sum))
+                (T0 / (fast_expn(-T0 / tex) - 1) - T0 / (fast_expn(-T0 / TCMB) - 1))
+                * (1 - fast_expn(hf_tau_sum))
             )
 
 
@@ -212,7 +220,7 @@ cdef void c_amm22_predict(double[::1] xarr, double[::1] spec, double *params,
         for j in range(NPARA):
             Qtot += (
                     (2 * JPARA[j] + 1)
-                    * c_exp(-H * (BROT * JPARA[j] * (JPARA[j] + 1)
+                    * fast_expn(H * (BROT * JPARA[j] * (JPARA[j] + 1)
                     + (CROT - BROT) * square(JPARA[j])) / (KB * trot))
             )
         # Calculate the main line optical depth
@@ -247,10 +255,10 @@ cdef void c_amm22_predict(double[::1] xarr, double[::1] spec, double *params,
             for k in range(NHF22):
                 tau_exp = square(nu + hf_nucen[k]) * hf_inv_denom[k]
                 if tau_exp < 20:
-                    hf_tau_sum += hf_tau[k] * c_exp(-tau_exp)
+                    hf_tau_sum += hf_tau[k] * fast_expn(tau_exp)
             spec[j] += (
-                (T0 / (c_exp(T0 / tex) - 1) - T0 / (c_exp(T0 / TCMB) - 1))
-                * (1 - c_exp(-hf_tau_sum))
+                (T0 / (fast_expn(-T0 / tex) - 1) - T0 / (fast_expn(-T0 / TCMB) - 1))
+                * (1 - fast_expn(hf_tau_sum))
             )
 
 
@@ -467,7 +475,6 @@ cdef class Dumper:
         str group_name, store_name
         bint no_dump
         int n_calls, n_samples
-        double max_loglike
         double[::1] quantiles
         list marginal_cols
 
@@ -477,7 +484,6 @@ cdef class Dumper:
         self.no_dump = no_dump
         self.n_calls = 0
         self.n_samples = -1
-        self.max_loglike = 0.0
         self.quantiles = np.array([
             0.00, 0.01, 0.10, 0.25, 0.50, 0.75, 0.90, 0.99, 1.00,
             1.58655254e-1, 0.84134475,  # 1-sigma credible interval
@@ -538,7 +544,6 @@ cdef void mn_dump(int *n_samples, int *n_live, int *n_params,
     if dumper.no_dump:
         return
     # Final call, write out parameters to HDF5 file.
-    #dumper.max_loglike = max_loglike[0]
     with h5py.File(dumper.store_name, 'a') as hdf:
         group = hdf.create_group(dumper.group_name)
         # run and spectrum atttributes

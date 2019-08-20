@@ -13,7 +13,7 @@ MNEST_DIR = Path('/users/bsvoboda/code/MultiNest')
 
 ext = Extension(
         'nestfit.wrapped',
-        ['nestfit/wrapper.pyx'],
+        ['nestfit/wrapper.pyx', 'nestfit/fastexp.c'],
         libraries=['m', 'multinest'],
         include_dirs=[np.get_include(), str(MNEST_DIR/'include'), 'nestfit'],
         library_dirs=[str(MNEST_DIR/'lib')],
@@ -26,7 +26,7 @@ ext = Extension(
 if __name__ == "__main__":
     setup(
             name='nestfit',
-            version='0.0.1.dev',
+            version='0.1',
             author='Brian Svoboda',
             author_email='brian.e.svoboda@gmail.com',
             license='MIT',
