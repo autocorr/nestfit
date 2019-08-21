@@ -17,7 +17,8 @@ ext = Extension(
         libraries=['m', 'multinest'],
         include_dirs=[np.get_include(), str(MNEST_DIR/'include'), 'nestfit'],
         library_dirs=[str(MNEST_DIR/'lib')],
-        extra_compile_args=['-O3', '-ffast-math', '-march=native', '-fopenmp'],
+        extra_compile_args=['-O3', '-march=native', '-mtune=native',
+            '-ffast-math', '-fopenmp'],
         extra_link_args=['-fopenmp'],
         define_macros=[('CYTHON_TRACE', '1')],
 )
