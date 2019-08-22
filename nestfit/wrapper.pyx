@@ -21,6 +21,7 @@ cdef extern from 'math.h' nogil:
     double c_abs 'abs' (double)
     double c_exp 'exp' (double)
     double c_sqrt 'sqrt' (double)
+    double c_floor 'floor' (double)
 
 
 cdef extern from 'fastexp.h' nogil:
@@ -125,22 +126,62 @@ cdef inline double square(double x) nogil:
     return x * x
 
 
-# NOTE while it does appear wasteful to do all of these stack allocations on
-# each call, it results in an insignificant performance penalty compared to
-# passing a struct containing `hf_` arrays.
-cdef void c_amm11_predict(double[::1] xarr, double[::1] spec, double *params,
-        int ndim) nogil:
+cdef class AmmoniaSpectrum:
+    cdef:
+        int size
+        double noise, prefactor, null_lnZ
+        double nu_chan, nu_min, nu_max
+        double[::1] xarr, data, pred, tarr
+
+    def __init__(self, object psk_spec, double noise):
+        """
+        Parameters
+        ----------
+        psk_spec : `pyspeckit.Spectrum`
+        noise : number
+            The baseline RMS noise level in K (brightness temperature).
+        """
+        cdef:
+            int i
+            double[::1] xarr, data
+        assert noise > 0
+        self.noise = noise
+        xarr = psk_spec.xarr.as_unit('Hz').value.copy()
+        data = psk_spec.data.data.copy()
+        size = xarr.shape[0]
+        self.size = size
+        self.nu_chan = c_abs(xarr[1] - xarr[0])
+        self.nu_min = xarr[0]
+        self.nu_max = xarr[self.size-1]
+        self.xarr = xarr
+        self.data = data
+        self.pred = np.empty_like(data)
+        self.tarr = np.empty_like(data)
+        self.prefactor = -self.size / 2 * np.log(2 * np.pi * noise**2)
+        self.null_lnZ = self.loglikelihood()
+
+    cdef double loglikelihood(self) nogil:
+        cdef:
+            int i
+            double lnL = 0.0
+        for i in range(self.size):
+            lnL += square(self.data[i] - self.pred[i])
+        return self.prefactor - lnL / (2 * square(self.noise))
+
+
+cdef void c_amm11_predict(AmmoniaSpectrum s, double *params, int ndim) nogil:
     cdef:
         int i, j, k
-        int size = xarr.shape[0]
         int ncomp = ndim // 5
         double trot, tex, ntot, sigm, voff
         double Z11, Qtot, pop_rotstate, expterm, fracterm, widthterm, tau_main
         double hf_freq, hf_width, hf_offset, nu, T0, hf_tau_sum, tau_exp
+        double nu_cutoff
         double hf_tau[NHF11]
         double hf_nucen[NHF11]
-        double hf_inv_denom[NHF11]
-    spec[:] = 0
+        double hf_idenom[NHF11]
+    for i in range(s.size):
+        s.pred[i] = 0.0
     for i in range(ncomp):
         voff = params[        i]
         trot = params[  ncomp+i]
@@ -172,42 +213,53 @@ cdef void c_amm11_predict(double[::1] xarr, double[::1] spec, double *params,
             hf_freq     = (1 - VOFF11[j] / CKMS) * NU11
             hf_width    = c_abs(sigm / CKMS * hf_freq)
             hf_offset   = voff / CKMS * hf_freq
-            hf_nucen[j] = hf_offset - hf_freq
+            hf_nucen[j] = hf_freq - hf_offset
             hf_tau[j]   = tau_main * TAU_WTS11[j]
-            hf_inv_denom[j] = 1 / (2.0 * square(hf_width))
-        # For each channel in the spectrum compute the summed optical depth
-        # over all of the hyperfine lines and then convert it to temperature
-        # units.
-        for j in range(size):
-            nu = xarr[j]
+            hf_idenom[j] = 1 / (2.0 * square(hf_width))
+        # For each HF line, sum the optical depth in each channel. The
+        # Gaussians are approximated by only computing them within the range
+        # of `exp(-20)` (4e-8) away from the HF line center center.
+        for j in range(s.size):
+            s.tarr[j] = 0
+        for j in range(NHF11):
+            nu_cutoff = c_sqrt(20 / hf_idenom[j])
+            nu_lo = (hf_nucen[j] - s.nu_min - nu_cutoff)
+            nu_hi = (hf_nucen[j] - s.nu_min + nu_cutoff)
+            # Get the lower and upper indices then check bounds
+            nu_lo_ix = <int>c_floor(nu_lo/s.nu_chan)
+            nu_hi_ix = <int>c_floor(nu_hi/s.nu_chan)
+            if nu_hi_ix < 0 or nu_lo_ix > s.size-1:
+                continue
+            nu_lo_ix = 0 if nu_lo_ix < 0 else nu_lo_ix
+            nu_hi_ix = s.size-1 if nu_hi_ix > s.size-1 else nu_hi_ix
+            # Calculate the Gaussian tau profile over the interval
+            for k in range(nu_lo_ix, nu_hi_ix):
+                nu = s.xarr[k] - hf_nucen[j]
+                tau_exp = nu * nu * hf_idenom[j]
+                s.tarr[k] += hf_tau[j] * fast_expn(tau_exp)
+        # Compute the brightness temperature
+        for j in range(s.size):
+            nu = s.xarr[j]
             T0 = H * nu / KB
-            hf_tau_sum = 0.0
-            # Approximation to not include the contributions from Gaussian
-            # components that are more than exp(-20) (4e-8) away from the HF
-            # line center.
-            for k in range(NHF11):
-                tau_exp = square(nu + hf_nucen[k]) * hf_inv_denom[k]
-                if tau_exp < 20:
-                    hf_tau_sum += hf_tau[k] * fast_expn(tau_exp)
-            spec[j] += (
-                (T0 / (fast_expn(-T0 / tex) - 1) - T0 / (fast_expn(-T0 / TCMB) - 1))
-                * (1 - fast_expn(hf_tau_sum))
+            s.pred[j] += (
+                (T0 / (c_exp(T0 / tex) - 1) - T0 / (c_exp(T0 / TCMB) - 1))
+                * (1 - fast_expn(s.tarr[j]))
             )
 
 
-cdef void c_amm22_predict(double[::1] xarr, double[::1] spec, double *params,
-        int ndim) nogil:
+cdef void c_amm22_predict(AmmoniaSpectrum s, double *params, int ndim) nogil:
     cdef:
         int i, j, k
-        int size = xarr.shape[0]
         int ncomp = ndim // 5
         double trot, tex, ntot, sigm, voff
         double Z22, Qtot, pop_rotstate, expterm, fracterm, widthterm, tau_main
         double hf_freq, hf_width, hf_offset, nu, T0, hf_tau_sum, tau_exp
+        double nu_cutoff
         double hf_tau[NHF22]
         double hf_nucen[NHF22]
-        double hf_inv_denom[NHF22]
-    spec[:] = 0
+        double hf_idenom[NHF22]
+    for i in range(s.size):
+        s.pred[i] = 0.0
     for i in range(ncomp):
         voff = params[        i]
         trot = params[  ncomp+i]
@@ -239,35 +291,46 @@ cdef void c_amm22_predict(double[::1] xarr, double[::1] spec, double *params,
             hf_freq     = (1 - VOFF22[j] / CKMS) * NU22
             hf_width    = c_abs(sigm / CKMS * hf_freq)
             hf_offset   = voff / CKMS * hf_freq
-            hf_nucen[j] = hf_offset - hf_freq
+            hf_nucen[j] = hf_freq - hf_offset
             hf_tau[j]   = tau_main * TAU_WTS22[j]
-            hf_inv_denom[j] = 1 / (2.0 * square(hf_width))
-        # For each channel in the spectrum compute the summed optical depth
-        # over all of hte hyperfine lines and then convert it to temperature
-        # units.
-        for j in range(size):
-            nu = xarr[j]
+            hf_idenom[j] = 1 / (2.0 * square(hf_width))
+        # For each HF line, sum the optical depth in each channel. The
+        # Gaussians are approximated by only computing them within the range
+        # of `exp(-20)` (4e-8) away from the HF line center center.
+        for j in range(s.size):
+            s.tarr[j] = 0
+        for j in range(NHF22):
+            nu_cutoff = c_sqrt(20 / hf_idenom[j])
+            nu_lo = (hf_nucen[j] - s.nu_min - nu_cutoff)
+            nu_hi = (hf_nucen[j] - s.nu_min + nu_cutoff)
+            # Get the lower and upper indices then check bounds
+            nu_lo_ix = <int>c_floor(nu_lo/s.nu_chan)
+            nu_hi_ix = <int>c_floor(nu_hi/s.nu_chan)
+            if nu_hi_ix < 0 or nu_lo_ix > s.size-1:
+                continue
+            nu_lo_ix = 0 if nu_lo_ix < 0 else nu_lo_ix
+            nu_hi_ix = s.size-1 if nu_hi_ix > s.size-1 else nu_hi_ix
+            # Calculate the Gaussian tau profile over the interval
+            for k in range(nu_lo_ix, nu_hi_ix):
+                nu = s.xarr[k] - hf_nucen[j]
+                tau_exp = nu * nu * hf_idenom[j]
+                s.tarr[k] += hf_tau[j] * fast_expn(tau_exp)
+        # Compute the brightness temperature
+        for j in range(s.size):
+            nu = s.xarr[j]
             T0 = H * nu / KB
-            hf_tau_sum = 0.0
-            # Approximation to not include the contributions from Gaussian
-            # components that are more than exp(-20) (4e-8) away from the HF
-            # line center.
-            for k in range(NHF22):
-                tau_exp = square(nu + hf_nucen[k]) * hf_inv_denom[k]
-                if tau_exp < 20:
-                    hf_tau_sum += hf_tau[k] * fast_expn(tau_exp)
-            spec[j] += (
-                (T0 / (fast_expn(-T0 / tex) - 1) - T0 / (fast_expn(-T0 / TCMB) - 1))
-                * (1 - fast_expn(hf_tau_sum))
+            s.pred[j] += (
+                (T0 / (c_exp(T0 / tex) - 1) - T0 / (c_exp(T0 / TCMB) - 1))
+                * (1 - fast_expn(s.tarr[j]))
             )
 
 
-cpdef void amm11_predict(double[::1] xarr, double[::1] spec, double[::1] params):
-    c_amm11_predict(xarr, spec, &params[0], params.shape[0])
+def amm11_predict(AmmoniaSpectrum s, double[::1] params):
+    c_amm11_predict(s, &params[0], params.shape[0])
 
 
-cpdef void amm22_predict(double[::1] xarr, double[::1] spec, double[::1] params):
-    c_amm22_predict(xarr, spec, &params[0], params.shape[0])
+def amm22_predict(AmmoniaSpectrum s, double[::1] params):
+    c_amm22_predict(s, &params[0], params.shape[0])
 
 
 cdef class PriorTransformer:
@@ -364,43 +427,6 @@ cdef class PriorTransformer:
             utheta[i] = self._interp(utheta[i], self.y_sigm)
 
 
-cdef class AmmoniaSpectrum:
-    cdef:
-        int size
-        double noise, prefactor, null_lnZ
-        double[::1] xarr, data, pred
-
-    def __init__(self, object psk_spec, double noise):
-        """
-        Parameters
-        ----------
-        psk_spec : `pyspeckit.Spectrum`
-        noise : number
-            The baseline RMS noise level in K (brightness temperature).
-        """
-        assert noise > 0
-        self.noise = noise
-        self.xarr = psk_spec.xarr.as_unit('Hz').value.copy()
-        self.data = psk_spec.data.data.copy()
-        self.pred = np.zeros_like(self.xarr)
-        self.size = psk_spec.shape[0]
-        self.prefactor = -self.size / 2 * np.log(2 * np.pi * noise**2)
-        self.null_lnZ = self.loglikelihood()
-        if self.xarr.shape[0] != self.data.shape[0]:
-            raise ValueError(
-                    'xarr and data must be the same size: '
-                    f'{self.xarr.shape[0]}, {self.data.shape[0]}'
-            )
-
-    cdef double loglikelihood(self) nogil:
-        cdef:
-            int i
-            double lnL = 0.0
-        for i in range(self.size):
-            lnL += square(self.data[i] - self.pred[i])
-        return self.prefactor - lnL / (2 * square(self.noise))
-
-
 cdef class Runner:
     cpdef double loglikelihood(self, object utheta, int ndim, int n_params):
         return 0.0
@@ -451,15 +477,15 @@ cdef class AmmoniaRunner(Runner):
             double[::1] params
         params = np.ctypeslib.as_array(utheta, shape=(n_params,))
         self.utrans.transform(&params[0], self.ncomp)
-        c_amm11_predict(self.s11.xarr, self.s11.pred, &params[0], self.ndim)
-        c_amm22_predict(self.s22.xarr, self.s22.pred, &params[0], self.ndim)
+        c_amm11_predict(self.s11, &params[0], self.ndim)
+        c_amm22_predict(self.s22, &params[0], self.ndim)
         lnL = self.s11.loglikelihood() + self.s22.loglikelihood()
         return lnL
 
     cdef void c_loglikelihood(self, double *utheta, double *lnL):
         self.utrans.transform(utheta, self.ncomp)
-        c_amm11_predict(self.s11.xarr, self.s11.pred, utheta, self.ndim)
-        c_amm22_predict(self.s22.xarr, self.s22.pred, utheta, self.ndim)
+        c_amm11_predict(self.s11, utheta, self.ndim)
+        c_amm22_predict(self.s22, utheta, self.ndim)
         lnL[0] = self.s11.loglikelihood() + self.s22.loglikelihood()
 
 

@@ -24,7 +24,7 @@ ext = Extension(
 )
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     setup(
             name='nestfit',
             version='0.1',
@@ -34,6 +34,6 @@ if __name__ == "__main__":
             url='https://github.com/autocorr/nestfit',
             requires=['numpy', 'cython'],
             packages=['nestfit'],
-            cmdclass={"build_ext": build_ext},
+            cmdclass={'build_ext': build_ext},
             ext_modules=[ext],
     )
