@@ -320,14 +320,15 @@ def test_pyspeckit_profiling_compare(n=100):
     # factors which provide constant overhead
     s11, s22 = get_test_spectra()
     xarr = s11.xarr.value.copy()
-    pred = np.empty_like(xarr)
     params = np.array([-1.0, 10.0, 4.0, 14.5,  0.3])
     #        ^~~~~~~~~ voff, trot, tex, ntot, sigm
+    pysc = pyspeckit.Spectrum(xarr=s11.xarr, data=s11.sampled_spec, header={})
+    amms = AmmoniaSpectrum(pysc, 0.1)
     # loop spectra to average function calls by themselves
     for _ in range(n):
         pyspeckit.spectrum.models.ammonia.ammonia(
                 s11.xarr, xoff_v=-1.0, trot=10.0, tex=4.0, ntot=14.5,
                 width=0.3, fortho=0, line_names=['oneone'])
-        amm11_predict(xarr, pred, params)
+        amm11_predict(amms, params)
 
 
