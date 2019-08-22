@@ -70,33 +70,29 @@ DEF NHF11 = 18
 DEF NHF22 = 21
 
 
-# Initialize stack allocated C arrays, note that these are raw data buffers and
-# do not support broadcasting like numpy arrays or typed memory views.
+# Initialize statically allocated C arrays. Note that "for each" style
+# iteration over a pointer type requires the syntex `for _ in P[:N]` to
+# specify the length.
 cdef:
     # J quantum numbers for para states
-    int JPARA[NPARA]
-    # velocity offsets of the hyperfine lines in km/s
-    double VOFF11[NHF11]
-    double VOFF22[NHF22]
-    # optical depth weights of the hyperfine lines
-    double TAU_WTS11[NHF11]
-    double TAU_WTS22[NHF22]
-JPARA[:] = [
+    int *JPARA = [
         1,  2,  4,  5,  7,  8, 10, 11, 13, 14, 16, 17, 19, 20, 22, 23, 25, 26,
         28, 29, 31, 32, 34, 35, 37, 38, 40, 41, 43, 44, 46, 47, 49, 50,
-]
-VOFF11[:] = [
+    ]
+    # velocity offsets of the hyperfine lines in km/s
+    double *VOFF11 = [
         19.8513, 19.3159, 7.88669, 7.46967, 7.35132, 0.460409, 0.322042,
         -0.0751680, -0.213003, 0.311034, 0.192266, -0.132382, -0.250923,
         -7.23349, -7.37280, -7.81526, -19.4117, -19.5500,
-]
-VOFF22[:] = [
+    ]
+    double *VOFF22 = [
         26.5263, 26.0111, 25.9505, 16.3917, 16.3793, 15.8642, 0.562503,
         0.528408, 0.523745, 0.0132820, -0.00379100, -0.0132820, -0.501831,
         -0.531340, -0.589080, -15.8547, -16.3698, -16.3822, -25.9505,
         -26.0111, -26.5263,
-]
-TAU_WTS11[:] = [
+    ]
+    # optical depth weights of the hyperfine lines
+    double *TAU_WTS11 = [
         # Original weights from pyspeckit
         #0.0740740, 0.1481480, 0.0925930, 0.1666670, 0.0185190, 0.0370370,
         #0.0185190, 0.0185190, 0.0925930, 0.0333330, 0.3000000, 0.4666670,
@@ -106,8 +102,8 @@ TAU_WTS11[:] = [
         0.01851847, 0.00925949, 0.00925949, 0.04629643, 0.01666648,
         0.14999978, 0.23333315, 0.01666648, 0.04629643, 0.00925949,
         0.08333337, 0.03703694, 0.07407389,
-]
-TAU_WTS22[:] = [
+    ]
+    double *TAU_WTS22 = [
         # Original values from pyspeckit
         #0.0041860, 0.0376740, 0.0209300, 0.0372090, 0.0260470, 0.0018600,
         #0.0209300, 0.0116280, 0.0106310, 0.2674420, 0.4996680, 0.1465120,
@@ -119,7 +115,7 @@ TAU_WTS22[:] = [
         0.39788440, 0.11666714, 0.00925935, 0.00846544, 0.01666651,
         0.00148111, 0.02074116, 0.02962943, 0.01666651, 0.02999971,
         0.00333330,
-]
+    ]
 
 
 cdef inline double square(double x) nogil:
@@ -130,7 +126,7 @@ cdef inline double partition_func(double trot) nogil:
     cdef:
         int j
         double Qtot = 0.0
-    for j in JPARA:
+    for j in JPARA[:NPARA]:
         Qtot += (
                 (2 * j + 1)
                 * fast_expn(H * (BROT * j * (j + 1)
