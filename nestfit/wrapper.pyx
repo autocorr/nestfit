@@ -126,6 +126,19 @@ cdef inline double square(double x) nogil:
     return x * x
 
 
+cdef inline double partition_func(double trot) nogil:
+    cdef:
+        int j
+        double Qtot = 0.0
+    for j in JPARA:
+        Qtot += (
+                (2 * j + 1)
+                * fast_expn(H * (BROT * j * (j + 1)
+                + (CROT - BROT) * j * j) / (KB * trot))
+        )
+    return Qtot
+
+
 cdef class AmmoniaSpectrum:
     cdef:
         int size
@@ -172,11 +185,12 @@ cdef class AmmoniaSpectrum:
 cdef void c_amm11_predict(AmmoniaSpectrum s, double *params, int ndim) nogil:
     cdef:
         int i, j, k
+        int nu_lo_ix, nu_hi_ix
         int ncomp = ndim // 5
         double trot, tex, ntot, sigm, voff
         double Z11, Qtot, pop_rotstate, expterm, fracterm, widthterm, tau_main
         double hf_freq, hf_width, hf_offset, nu, T0, hf_tau_sum, tau_exp
-        double nu_cutoff
+        double nu_cutoff, nu_lo, nu_hi
         double hf_tau[NHF11]
         double hf_nucen[NHF11]
         double hf_idenom[NHF11]
@@ -190,13 +204,7 @@ cdef void c_amm11_predict(AmmoniaSpectrum s, double *params, int ndim) nogil:
         sigm = params[4*ncomp+i]
         # Calculate the partition function and the level populations
         Z11 = 3 * c_exp(-H * (BROT * 2 + (CROT - BROT)) / (KB * trot))
-        Qtot = 0.0
-        for j in range(NPARA):
-            Qtot += (
-                    (2 * JPARA[j] + 1)
-                    * fast_expn(H * (BROT * JPARA[j] * (JPARA[j] + 1)
-                    + (CROT - BROT) * square(JPARA[j])) / (KB * trot))
-            )
+        Qtot = partition_func(trot)
         # Calculate the main line optical depth
         pop_rotstate = 10**ntot * Z11 / Qtot
         expterm = (
@@ -250,11 +258,12 @@ cdef void c_amm11_predict(AmmoniaSpectrum s, double *params, int ndim) nogil:
 cdef void c_amm22_predict(AmmoniaSpectrum s, double *params, int ndim) nogil:
     cdef:
         int i, j, k
+        int nu_lo_ix, nu_hi_ix
         int ncomp = ndim // 5
         double trot, tex, ntot, sigm, voff
         double Z22, Qtot, pop_rotstate, expterm, fracterm, widthterm, tau_main
         double hf_freq, hf_width, hf_offset, nu, T0, hf_tau_sum, tau_exp
-        double nu_cutoff
+        double nu_cutoff, nu_lo, nu_hi
         double hf_tau[NHF22]
         double hf_nucen[NHF22]
         double hf_idenom[NHF22]
@@ -268,13 +277,7 @@ cdef void c_amm22_predict(AmmoniaSpectrum s, double *params, int ndim) nogil:
         sigm = params[4*ncomp+i]
         # Calculate the partition function and the level populations
         Z22 = 5 * c_exp(-H * (BROT * 6 + (CROT - BROT) * 4) / (KB * trot))
-        Qtot = 0.0
-        for j in range(NPARA):
-            Qtot += (
-                    (2 * JPARA[j] + 1)
-                    * fast_expn(H * (BROT * JPARA[j] * (JPARA[j] + 1)
-                    + (CROT - BROT) * square(JPARA[j])) / (KB * trot))
-            )
+        Qtot = partition_func(trot)
         # Calculate the main line optical depth
         pop_rotstate = 10**ntot * Z22 / Qtot
         expterm = (
