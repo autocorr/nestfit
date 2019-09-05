@@ -46,9 +46,9 @@ Installation and Requirements
 To use this package MultiNest must first be compiled and placed in your host
 systems shared library path. This must be done so that it can be linked against
 when compiling the Cython extension module. A fortran compiler is necessary to
-build MultiNest, such as `gfortran` or `ifort`.  To use the MPI
+build MultiNest, such as ``gfortran`` or ``ifort``.  To use the MPI
 functionality, an MPI library is also required, such as MPICH. If using
-`anaconda` on 64-bit Linux this could be done with:
+``anaconda`` on 64-bit Linux this could be done with:
 
 .. code-block:: bash
 
