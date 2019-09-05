@@ -41,6 +41,37 @@ module.  As of August, 2019, this provides a factor of 220 reduction in time to
 compute a model spectrum compared to the PySpecKit v0.1.22 reference
 implementation.
 
+Installation and Requirements
+-----------------------------
+To use this package MultiNest must first be compiled and placed in your host
+systems shared library path. This must be done so that it can be linked against
+when compiling the Cython extension module. A fortran compiler is necessary to
+build MultiNest, such as `gfortran` or `ifort`.  To use the MPI
+functionality, an MPI library is also required, such as MPICH. If using
+`anaconda` on 64-bit Linux this could be done with:
+
+.. codeblock:: shell
+
+    $ conda install gfortran_linux-64 mpich
+
+Then place one of the following lines into your shell configuration file:
+
+.. codeblock:: shell
+
+    $ # if installed into your base conda environment
+    $ export LD_LIBRARY_PATH=<ANACONDA-PATH>/lib/:$LD_LIBRARY_PATH
+    $ # or if installed into a specific conda environment
+    $ export LD_LIBRARY_PATH=<ANACONDA-PATH>/envs/<ENV-NAME>/lib/:$LD_LIBRARY_PATH
+
+MultiNest can then be built with `cmake` following the supplied installation
+instructions:
+
+.. codeblock:: shell
+
+    $ cd MultiNest/build
+    $ cmake ..
+    $ make
+
 
 License
 =======

@@ -11,13 +11,12 @@ import h5py
 import numpy as np
 import pandas as pd
 
-import corner
 import pyspeckit
 import spectral_cube
 from astropy.io import fits
 from astropy import units as u
 
-from nestfit.wrapped import (amm11_predict, amm22_predict,
+from .wrapped import (amm11_predict, amm22_predict,
         PriorTransformer, AmmoniaSpectrum, AmmoniaRunner,
         Dumper, run_multinest)
 
@@ -50,9 +49,13 @@ class SyntheticSpectrum:
             np.random.seed(5)
         else:
             np.random.seed()
-        self.xarr = xarr.copy()
-        self.varr = self.xarr.as_unit('km/s')
+        # ensure frequency ordering is ascending
+        if xarr[1] - xarr[0] > 0:
+            self.xarr = xarr.copy()
+        else:
+            self.xarr = xarr[::-1].copy()
         self.xarr.convert_to_unit('Hz')
+        self.varr = self.xarr.as_unit('km/s')
         self.params = params
         self.noise = noise
         self.vsys = vsys
@@ -88,6 +91,11 @@ class SyntheticSpectrum:
         self.noise_spec = self.calc_noise()
         self.sampled_spec = self.sum_spec + self.noise_spec
 
+    def to_ammspec(self):
+        xarr = self.xarr.value.copy()
+        data = self.sampled_spec
+        return AmmoniaSpectrum(xarr, data, self.noise)
+
 
 def get_test_spectra():
     freqs = pyspeckit.spectrum.models.ammonia_constants.freq_dict.copy()
@@ -119,19 +127,12 @@ def get_test_spectra():
 
 def test_nested(ncomp=2):
     synspec = get_test_spectra()
-    spectra = [
-        AmmoniaSpectrum(
-            pyspeckit.Spectrum(
-                xarr=syn.xarr, data=syn.sampled_spec, header={}),
-            syn.noise)
-        for syn in synspec
-    ]
+    spectra = [syn.to_ammspec() for syn in synspec]
     utrans = PriorTransformer()
-    dumper = Dumper(f'001/{ncomp}', store_name='test', no_dump=True)
+    dumper = Dumper(f'001/{ncomp}', store_name='test', no_dump=False)
     runner = AmmoniaRunner(spectra, utrans, ncomp)
-    for _ in range(100):
-        run_multinest(runner, dumper, nlive=60, seed=5, tol=1.0, efr=0.3,
-                updInt=2000)
+    run_multinest(runner, dumper, nlive=60, seed=5, tol=1.0, efr=0.3,
+            updInt=2000)
     return synspec, spectra, runner
 
 
@@ -157,20 +158,12 @@ class CubeStack:
         ).as_unit('Hz').value.copy()
 
     def get_spectra(self, i_lon, i_lat):
-        spec11 = pyspeckit.Spectrum(
-                xarr=self.xarr11,
-                xarrkwargs={'unit': 'Hz'},
-                data=self.cube11[:,i_lat,i_lon],
-                header={},
-        )
-        spec22 = pyspeckit.Spectrum(
-                xarr=self.xarr22,
-                xarrkwargs={'unit': 'Hz'},
-                data=self.cube22[:,i_lat,i_lon],
-                header={},
-        )
-        spectra = [AmmoniaSpectrum(spec11, self.noise),
-                   AmmoniaSpectrum(spec22, self.noise)]
+        data11 = self.cube11[:,i_lat,i_lon]
+        data22 = self.cube22[:,i_lat,i_lon]
+        spectra = [
+                AmmoniaSpectrum(self.xarr11, data11, self.noise),
+                AmmoniaSpectrum(self.xarr22, data22, self.noise),
+        ]
         return spectra
 
 
@@ -320,10 +313,10 @@ def test_pyspeckit_profiling_compare(n=100):
     # factors which provide constant overhead
     s11, s22 = get_test_spectra()
     xarr = s11.xarr.value.copy()
+    data = s11.sampled_spec
     params = np.array([-1.0, 10.0, 4.0, 14.5,  0.3])
     #        ^~~~~~~~~ voff, trot, tex, ntot, sigm
-    pysc = pyspeckit.Spectrum(xarr=s11.xarr, data=s11.sampled_spec, header={})
-    amms = AmmoniaSpectrum(pysc, 0.1)
+    amms = AmmoniaSpectrum(xarr, data, 0.1)
     # loop spectra to average function calls by themselves
     for _ in range(n):
         pyspeckit.spectrum.models.ammonia.ammonia(

@@ -142,28 +142,28 @@ cdef class AmmoniaSpectrum:
         double nu_chan, nu_min, nu_max
         double[::1] xarr, data, pred, tarr
 
-    def __init__(self, object psk_spec, double noise):
+    def __init__(self, xarr, data, noise):
         """
         Parameters
         ----------
-        psk_spec : `pyspeckit.Spectrum`
+        xarr : array
+            x-axis array in Hz.
+        data : array
+            intensity values in K (brightness temperature).
         noise : number
             The baseline RMS noise level in K (brightness temperature).
         """
-        cdef:
-            int i
-            double[::1] xarr, data
         assert noise > 0
-        self.noise = noise
-        xarr = psk_spec.xarr.as_unit('Hz').value.copy()
-        data = psk_spec.data.data.copy()
-        size = xarr.shape[0]
-        self.size = size
-        self.nu_chan = c_abs(xarr[1] - xarr[0])
-        self.nu_min = xarr[0]
-        self.nu_max = xarr[self.size-1]
+        nu_chan = xarr[1] - xarr[0]
+        assert nu_chan > 0
         self.xarr = xarr
         self.data = data
+        self.noise = noise
+        size = xarr.shape[0]
+        self.size = size
+        self.nu_chan = nu_chan
+        self.nu_min = xarr[0]
+        self.nu_max = xarr[self.size-1]
         self.pred = np.empty_like(data)
         self.tarr = np.empty_like(data)
         self.prefactor = -self.size / 2 * np.log(2 * np.pi * noise**2)
