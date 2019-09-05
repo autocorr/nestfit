@@ -50,13 +50,13 @@ build MultiNest, such as `gfortran` or `ifort`.  To use the MPI
 functionality, an MPI library is also required, such as MPICH. If using
 `anaconda` on 64-bit Linux this could be done with:
 
-.. codeblock:: shell
+.. code-block:: bash
 
     $ conda install gfortran_linux-64 mpich
 
 Then place one of the following lines into your shell configuration file:
 
-.. codeblock:: shell
+.. code-block:: bash
 
     $ # if installed into your base conda environment
     $ export LD_LIBRARY_PATH=<ANACONDA-PATH>/lib/:$LD_LIBRARY_PATH
@@ -66,7 +66,7 @@ Then place one of the following lines into your shell configuration file:
 MultiNest can then be built with `cmake` following the supplied installation
 instructions:
 
-.. codeblock:: shell
+.. code-block:: bash
 
     $ cd MultiNest/build
     $ cmake ..
