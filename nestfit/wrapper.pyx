@@ -165,6 +165,19 @@ cdef class AmmoniaSpectrum:
         return self.prefactor - lnL / (2 * square(self.noise))
 
 
+cdef inline double partition_func(double trot) nogil:
+    cdef:
+        int j
+        double Qtot = 0.0
+    for j in JPARA[:NPARA]:
+        Qtot += (
+                (2 * j + 1)
+                * fast_expn(H * (BROT * j * (j + 1)
+                + (CROT - BROT) * j * j) / (KB * trot))
+        )
+    return Qtot
+
+
 cdef void c_amm11_predict(AmmoniaSpectrum s, double *params, int ndim) nogil:
     cdef:
         int i, j, k
@@ -236,19 +249,6 @@ cdef void c_amm11_predict(AmmoniaSpectrum s, double *params, int ndim) nogil:
                 (T0 / (c_exp(T0 / tex) - 1) - T0 / (c_exp(T0 / TCMB) - 1))
                 * (1 - fast_expn(s.tarr[j]))
             )
-
-
-cdef inline double partition_func(double trot) nogil:
-    cdef:
-        int j
-        double Qtot = 0.0
-    for j in JPARA[:NPARA]:
-        Qtot += (
-                (2 * j + 1)
-                * fast_expn(H * (BROT * j * (j + 1)
-                + (CROT - BROT) * j * j) / (KB * trot))
-        )
-    return Qtot
 
 
 cdef void c_amm22_predict(AmmoniaSpectrum s, double *params, int ndim) nogil:
