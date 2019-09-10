@@ -9,6 +9,7 @@ from pathlib import Path
 
 import h5py
 import numpy as np
+import scipy as sp
 import pandas as pd
 
 import pyspeckit
@@ -16,9 +17,12 @@ import spectral_cube
 from astropy.io import fits
 from astropy import units as u
 
-from .wrapped import (amm11_predict, amm22_predict,
-        PriorTransformer, AmmoniaSpectrum, AmmoniaRunner,
-        Dumper, run_multinest)
+from .wrapped import (
+        amm11_predict, amm22_predict,
+        Prior, OrderedPrior, PriorTransformer,
+        AmmoniaSpectrum, AmmoniaRunner,
+        Dumper, run_multinest,
+)
 
 
 class SyntheticSpectrum:
@@ -125,11 +129,61 @@ def get_test_spectra():
     return spectra
 
 
+def get_irdc_priors(size=500, vsys=0.0):
+    """
+    Evaluate the inverse cumulative prior functions and construct a
+    `PriorTransformer` instance for use with MultiNest. These distributions are
+    set for the IRDCs of (Svoboda et al. in prep) and constructed
+
+    and use independent priors
+    interpolate them
+    using an equally spaced sampling along the x-axis. Values are linearly
+    interpolated between adjacent points.
+
+    Parameters
+    ----------
+    size : int
+        Number of even, linearly spaced samples in the distribution
+    vsys : float
+        Systemic velocity to center prior distribution about
+    """
+    # prior distributions
+    # NOTE gamma distributions evaluate to inf at 1, so only evaluate
+    # functions up to 1-epsilon. For the beta distribution ppf, 1-epsilon
+    # evaluates to 0.999045 .
+    epsilon = 1e-13
+    x = np.linspace(0, 1-epsilon, size)
+    dist_voff = sp.stats.beta(5.0, 5.0)
+    dist_trot = sp.stats.gamma(4.4, scale=0.070)
+    dist_tex  = sp.stats.beta(1.0, 2.5)
+    dist_ntot = sp.stats.beta(16.0, 14.0)
+    dist_sigm = sp.stats.gamma(1.5, loc=0.03, scale=0.2)
+    # interpolation values, transformed to the intervals:
+    # voff [-4.00,  4.0] km/s  (centered on vsys)
+    # trot [ 7.00, 30.0] K
+    # tex  [ 2.74, 12.0] K
+    # ntot [12.00, 17.0] log(cm^-2)
+    # sigm [ 0.00,  2.0] km/s
+    y_voff =  8.00 * dist_voff.ppf(x) -  4.00 + vsys
+    y_trot = 23.00 * dist_trot.ppf(x) +  7.00
+    y_tex  =  9.26 * dist_tex.ppf(x)  +  2.74
+    y_ntot =  5.00 * dist_ntot.ppf(x) + 12.00
+    y_sigm =  2.00 * dist_sigm.ppf(x)
+    priors = [
+            OrderedPrior(y_voff),
+            Prior(y_trot),
+            Prior(y_tex),
+            Prior(y_ntot),
+            Prior(y_sigm),
+    ]
+    return PriorTransformer(priors)
+
+
 def test_nested(ncomp=2):
     synspec = get_test_spectra()
     spectra = [syn.to_ammspec() for syn in synspec]
-    utrans = PriorTransformer()
-    dumper = Dumper(f'001/{ncomp}', store_name='test', no_dump=False)
+    utrans = get_irdc_priors(vsys=0)
+    dumper = Dumper(f'001/{ncomp}', store_name='test', no_dump=True)
     runner = AmmoniaRunner(spectra, utrans, ncomp)
     run_multinest(runner, dumper, nlive=60, seed=5, tol=1.0, efr=0.3,
             updInt=2000)
@@ -267,7 +321,7 @@ def test_fit_cube():
     stack = CubeStack(cube11, cube22, noise=0.320)
     lnZ_thresh = 16.1  # log10 -> 7 ... approx 4 sigma
     store_name = 'run/test_cube_multin'
-    utrans = PriorTransformer(vsys=81.5)
+    utrans = get_irdc_priors()
     fit_cube(stack, utrans, store_name=store_name, nproc=8)
 
 

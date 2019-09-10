@@ -7,7 +7,6 @@
 cimport cython
 
 import h5py
-import scipy as sp
 
 import numpy as np
 cimport numpy as np
@@ -332,76 +331,50 @@ def amm22_predict(AmmoniaSpectrum s, double[::1] params):
     c_amm22_predict(s, &params[0], params.shape[0])
 
 
-cdef class PriorTransformer:
+cdef class Prior:
     cdef:
         int size
-        double dx, vsys, vmin, vmax
-        double[::1] y_trot, y_tex, y_ntot, y_sigm, y_voff
+        double dx, dmin, dmax
+        double[::1] data
 
-    def __init__(self, int size=500, double vsys=0.0):
+    def __init__(self, data):
         """
-        Evaluate the inverse cumulative prior functions and interpolate them
-        using an equally spaced sampling along the x-axis. Values are linearly
-        interpolated between adjacent points.
+        Interpolate the inverse cumulative prior function using an equally
+        spaced sampling along the x-axis. Values are linearly interpolated
+        between adjacent points.
 
         Parameters
         ----------
-        size : int
-            Number of even, linearly spaced samples in the distribution
-        vsys : double
-            Systemic velocity to center prior distribution about
+        data : array-like
+            Inverse cumulative prior function (see "percent pointile function"
+            `.ppf` scipy statistical distributions)
         """
-        self.size = size
-        self.dx = 1 / <double>(size)
-        self.vsys = vsys
-        # prior distributions
-        # NOTE gamma distributions evaluate to inf at 1, so only evaluate
-        # functions up to 1-epsilon. For the beta distribution ppf, 1-epsilon
-        # evaluates to 0.999045 .
-        epsilon = 1e-13
-        x = np.linspace(0, 1-epsilon, size)
-        dist_voff = sp.stats.beta(5.0, 5.0)
-        dist_trot = sp.stats.gamma(4.4, scale=0.070)
-        dist_tex  = sp.stats.beta(1.0, 2.5)
-        dist_ntot = sp.stats.beta(16.0, 14.0)
-        dist_sigm = sp.stats.gamma(1.5, loc=0.03, scale=0.2)
-        # interpolation values, transformed to the intervals:
-        # voff [-4.00,  4.0] km/s  (centered on vsys)
-        # trot [ 7.00, 30.0] K
-        # tex  [ 2.74, 12.0] K
-        # ntot [12.00, 17.0] log(cm^-2)
-        # sigm [ 0.00,  2.0] km/s
-        self.y_voff =  8.00 * dist_voff.ppf(x) -  4.00 + vsys
-        self.y_trot = 23.00 * dist_trot.ppf(x) +  7.00
-        self.y_tex  =  9.26 * dist_tex.ppf(x)  +  2.74
-        self.y_ntot =  5.00 * dist_ntot.ppf(x) + 12.00
-        self.y_sigm =  2.00 * dist_sigm.ppf(x)
-        self.vmin = np.min(self.y_voff)
-        self.vmax = np.max(self.y_voff)
+        self.data = data
+        self.size = data.shape[0]
+        self.dx = 1 / <double>(self.size)
+        self.dmin = np.min(data)
+        self.dmax = np.max(data)
 
-    cdef double _interp(self, double u, double[::1] data) nogil:
+    cdef double _interp(self, double u) nogil:
         cdef:
             int i_lo, i_hi
             double x_lo, y_lo, y_hi, slope
-        i_lo = <int>((data.shape[0] - 1) * u)
+        i_lo = <int>((self.size - 1) * u)
         i_hi = i_lo + 1
         x_lo = u - u % self.dx
-        y_lo = data[i_lo]
-        y_hi = data[i_hi]
+        y_lo = self.data[i_lo]
+        y_hi = self.data[i_hi]
         slope = (y_hi - y_lo) / self.dx
         return slope * (u - x_lo) + y_lo
 
-    cdef void transform(self, double *utheta, int n) nogil:
-        """
-        Parameters
-        ----------
-        utheta : double*
-            Pointer to parameter cube.
-        n : int
-            Number of components. `utheta` should have dimension [5*n].
-        """
-        # FIXME may do unsafe writes if `utheta` does not have the same
-        # size as the number of components `n`.
+    cdef void interp(self, double *utheta, int n, int npar) nogil:
+        cdef int i
+        for i in range(npar*n, (npar+1)*n):
+            utheta[i] = self._interp(utheta[i])
+
+
+cdef class OrderedPrior(Prior):
+    cdef void interp(self, double *utheta, int n, int npar) nogil:
         cdef:
             int i
             double u, umin, umax
@@ -413,17 +386,50 @@ cdef class PriorTransformer:
         #        |----x----|
         #             |--x-|
         umin, umax = 0.0, 1.0
-        for i in range(  0,   n):
+        for i in range(npar*n, (npar+1)*n):
             u = umin = (umax - umin) * utheta[i] + umin
-            utheta[i] = self._interp(u, self.y_voff)
-        for i in range(  n, 2*n):
-            utheta[i] = self._interp(utheta[i], self.y_trot)
-        for i in range(2*n, 3*n):
-            utheta[i] = self._interp(utheta[i], self.y_tex)
-        for i in range(3*n, 4*n):
-            utheta[i] = self._interp(utheta[i], self.y_ntot)
-        for i in range(4*n, 5*n):
-            utheta[i] = self._interp(utheta[i], self.y_sigm)
+            utheta[i] = self._interp(u)
+
+
+cdef class PriorTransformer:
+    cdef:
+        int npriors
+        Prior p_trot, p_tex, p_ntot, p_sigm, p_voff
+
+    def __init__(self, priors):
+        """
+        Evaluate the prior transformation functions on the unit cube. The
+        `.transform` method is passed to MultiNest and called on each
+        likelihood evaluation.
+
+        Parameters
+        ----------
+        priors : iterable(Prior)
+            List-like of individual `Prior` instances.
+        """
+        self.npriors = len(priors)
+        self.p_voff = priors[0]
+        self.p_trot = priors[1]
+        self.p_tex  = priors[2]
+        self.p_ntot = priors[3]
+        self.p_sigm = priors[4]
+
+    cdef void transform(self, double *utheta, int ncomp) nogil:
+        """
+        Parameters
+        ----------
+        utheta : double*
+            Pointer to parameter unit cube.
+        ncomp : int
+            Number of components. `utheta` should have dimension [5*n].
+        """
+        # NOTE may do unsafe writes if `utheta` does not have the same
+        # size as the number of components `n`.
+        self.p_voff.interp(utheta, ncomp, 0)
+        self.p_trot.interp(utheta, ncomp, 1)
+        self.p_tex.interp( utheta, ncomp, 2)
+        self.p_ntot.interp(utheta, ncomp, 3)
+        self.p_sigm.interp(utheta, ncomp, 4)
 
 
 cdef class Runner:
