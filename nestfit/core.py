@@ -133,12 +133,7 @@ def get_irdc_priors(size=500, vsys=0.0):
     """
     Evaluate the inverse cumulative prior functions and construct a
     `PriorTransformer` instance for use with MultiNest. These distributions are
-    set for the IRDCs of (Svoboda et al. in prep) and constructed
-
-    and use independent priors
-    interpolate them
-    using an equally spaced sampling along the x-axis. Values are linearly
-    interpolated between adjacent points.
+    constructed for the IRDCs observed in Svoboda et al. (in prep).
 
     Parameters
     ----------
