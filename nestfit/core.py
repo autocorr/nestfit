@@ -216,22 +216,59 @@ class CubeStack:
         return spectra
 
 
-def check_hdf5_ext(store_name):
-    if store_name.endswith('.hdf5'):
+def check_ext(store_name, ext='hdf'):
+    if store_name.endswith(f'.{ext}'):
         return store_name
     else:
-        return f'{store_name}.hdf5'
+        return f'{store_name}.{ext}'
+
+
+class HdfStore:
+    linked_table = Path('table.hdf5')
+    chunk_filen = 'chunk'
+
+    def __init__(self, name, nchunks=1):
+        self.store_name = name
+        self.store_dir = Path(check_ext(self.store_name, ext='store'))
+        if self.store_dir.exists():
+            self.hdf = h5py.File(self.store_dir / self.linked_table, 'a')
+            self.nchunks = self.hdf.attrs['nchunks']
+        else:
+            self.store_dir.mkdir()
+            self.hdf = h5py.File(self.store_dir / self.linked_table, 'a')
+            self.hdf.attrs['nchunks'] = nchunks
+            self.nchunks = nchunks
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, v_type, value, traceback):
+        self.hdf.close()
+
+    @property
+    def chunk_names(self):
+        paths = [
+                self.store_dir / Path(f'{self.chunk_filen}{i}.hdf')
+                for i in range(self.nchunks)
+        ]
+        return paths
+
+    def link_files(self):
+        for chunk_path in self.chunk_names:
+            with h5py.File(chunk_path, 'r') as chunk_hdf:
+                for group_name in chunk_hdf:
+                    self.hdf[group_name] = h5py.ExternalLink(chunk_path, group_name)
 
 
 class MappableFitter:
-    def __init__(self, stack, utrans, lnZ_thresh=16.1):
+    def __init__(self, stack, utrans, lnZ_thresh=16.1, mn_kwargs=None):
         self.stack = stack
         self.utrans = utrans
         self.lnZ_thresh = lnZ_thresh
+        self.mn_kwargs = mn_kwargs if mn_kwargs is not None else {}
 
     def fit(self, *args):
-        (all_lon, all_lat), store_name = args
-        store_file = check_hdf5_ext(store_name)
+        (all_lon, all_lat), store_path = args
         for (i_lon, i_lat) in zip(all_lon, all_lat):
             spectra = self.stack.get_spectra(i_lon, i_lat)
             group_name = f'pix_{i_lon}_{i_lat}'
@@ -246,13 +283,12 @@ class MappableFitter:
                     break
                 print(f':: ({i_lon}, {i_lat}) -> N = {ncomp}')
                 sub_group_name = group_name + f'/{ncomp}'
-                dumper = HdfDumper(sub_group_name, store_name=store_name)
+                dumper = HdfDumper(sub_group_name, store_name=str(store_path))
                 runner = AmmoniaRunner(spectra, self.utrans, ncomp)
-                # FIXME needs right kwargs
-                run_multinest(runner, dumper)
-                dumper.write_hdf(runner=runner)
+                # FIXME needs right kwargs per ncomp
+                run_multinest(runner, dumper, **self.mn_kwargs)
                 old_lnZ, new_lnZ = new_lnZ, dumper.lnZ
-            with h5py.File(store_file, 'a') as hdf:
+            with h5py.File(store_path, 'a') as hdf:
                 group = hdf[group_name]
                 group.attrs['i_lon'] = i_lon
                 group.attrs['i_lat'] = i_lat
@@ -268,31 +304,14 @@ def get_multiproc_indices(shape, nproc):
     return indices
 
 
-def link_store_files(store_name, chunk_names):
-    store_file = check_hdf5_ext(store_name)
-    chunk_dir = Path(f'{store_name}_chunks')
-    if not chunk_dir.exists():
-        chunk_dir.mkdir()
-    with h5py.File(store_file, 'a') as m_hdf:
-        for chunk_name in chunk_names:
-            chunk_file = Path(f'{chunk_name}.hdf5')
-            chunk_file.rename(chunk_dir/chunk_file)
-            chunk_file = chunk_dir / chunk_file
-            with h5py.File(chunk_file, 'r') as p_hdf:
-                for group_name in p_hdf:
-                    m_hdf[group_name] = h5py.ExternalLink(chunk_file, group_name)
-
-
-def fit_cube(stack, utrans, store_name='run/test_cube_fit', nproc=1):
+def fit_cube(stack, utrans, store_name='run/test_cube', nproc=1):
     n_chan, n_lat, n_lon = stack.shape
+    store = HdfStore(store_name, nchunks=nproc)
+    # FIXME insert cube stack header information into hdf store
     mappable = MappableFitter(stack, utrans)
     # create list of indices for each process
-    chunk_names = [f'{store_name}_chunk{i}' for i in range(nproc)]
     indices = get_multiproc_indices(stack.spatial_shape, nproc)
-    sequence = list(zip(indices, chunk_names))
-    if nproc == 1:
-        mappable.fit((indices[0], store_name))
-        return
+    sequence = list(zip(indices, store.chunk_names))
     # spawn processes and process cube
     # NOTE A simple `multiprocessing.Pool` cannot be used because the
     # Cython C-extensions cannot be pickled without effort to implement
@@ -307,7 +326,7 @@ def fit_cube(stack, utrans, store_name='run/test_cube_fit', nproc=1):
     for proc in procs:
         proc.join()
     # link all of the HDF5 files together
-    link_store_files(store_name, chunk_names)
+    store.link_files()
 
 
 def test_fit_cube():
