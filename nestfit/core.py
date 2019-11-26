@@ -261,10 +261,12 @@ class HdfStore:
 
 
 class MappableFitter:
-    def __init__(self, stack, utrans, lnZ_thresh=16.1, mn_kwargs=None):
+    def __init__(self, stack, utrans, lnZ_thresh=11, ncomp_max=3,
+            mn_kwargs=None):
         self.stack = stack
         self.utrans = utrans
         self.lnZ_thresh = lnZ_thresh
+        self.ncomp_max = ncomp_max
         self.mn_kwargs = mn_kwargs if mn_kwargs is not None else {}
 
     def fit(self, *args):
@@ -279,7 +281,7 @@ class MappableFitter:
             # produce a significant increase in the evidence.
             while new_lnZ - old_lnZ > self.lnZ_thresh:
                 ncomp += 1
-                if ncomp == 3:  # FIXME for testing
+                if ncomp == self.ncomp_max:
                     break
                 print(f':: ({i_lon}, {i_lat}) -> N = {ncomp}')
                 sub_group_name = group_name + f'/{ncomp}'
@@ -333,7 +335,6 @@ def test_fit_cube():
     cube11 = spectral_cube.SpectralCube.read('data/test_cube_11.fits')[:-1]
     cube22 = spectral_cube.SpectralCube.read('data/test_cube_22.fits')[:-1]
     stack = CubeStack(cube11, cube22, noise=0.320)
-    lnZ_thresh = 16.1  # log10 -> 7 ... approx 4 sigma
     store_name = 'run/test_cube_multin'
     utrans = get_irdc_priors()
     fit_cube(stack, utrans, store_name=store_name, nproc=8)

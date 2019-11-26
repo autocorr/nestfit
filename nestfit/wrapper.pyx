@@ -391,6 +391,28 @@ cdef class OrderedPrior(Prior):
             utheta[i] = self._interp(u)
 
 
+# NOTE This class has not been tested.
+cdef class SeparatedPrior(Prior):
+    cdef:
+        Prior prior_indep, prior_depen
+
+    def __init__(self, prior_indep, prior_depen):
+        self.prior_indep = prior_indep
+        self.prior_depen = prior_depen
+
+    cdef void interp(self, double *utheta, int n, int npar) nogil:
+        cdef:
+            int i
+            double u
+        utheta[0] = u = self.prior_indep._interp(utheta[0])
+        # Draw initial value from independent prior distribution, then
+        # draw offsets from the running value from the dependent prior
+        # distribution, updated in `u` for (n-1) samples.
+        # Note that python will not execute a loop of zero interval
+        for i in range(npar*n+1, (npar+1)*n):
+            utheta[i] = u = u + self.prior_depen._interp(utheta[i])
+
+
 cdef class PriorTransformer:
     cdef:
         int npriors
@@ -424,7 +446,7 @@ cdef class PriorTransformer:
             Number of components. `utheta` should have dimension [5*n].
         """
         # NOTE may do unsafe writes if `utheta` does not have the same
-        # size as the number of components `n`.
+        # size as the number of components `ncomp`.
         self.p_voff.interp(utheta, ncomp, 0)
         self.p_trot.interp(utheta, ncomp, 1)
         self.p_tex.interp( utheta, ncomp, 2)
