@@ -3,6 +3,7 @@
 Gaussian mixture fitting with Nested Sampling.
 """
 
+import warnings
 import multiprocessing
 from copy import deepcopy
 from pathlib import Path
@@ -190,6 +191,7 @@ class CubeStack:
 
     def __init__(self, cube11, cube22, noise=0.320):
         # FIXME handle noise per pixel from an explicit error map
+        self._header = cube11.header.copy()
         self.cube11 = cube11.to('K')._data.copy()
         self.cube22 = cube22.to('K')._data.copy()
         self.noise  = noise
@@ -205,6 +207,34 @@ class CubeStack:
                 velocity_convention='radio',
                 refX=self.freqs['twotwo'],
         ).as_unit('Hz').value.copy()
+
+    @property
+    def simple_header(self):
+        # FIXME first two axes must be angular coordinates
+        keys = (
+                'SIMPLE', 'BITPIX',
+                'NAXIS',
+                'NAXIS1', 'NAXIS2',
+                'WCSAXES',
+                'CRPIX1', 'CRPIX2',
+                'CDELT1', 'CDELT2',
+                'CUNIT1', 'CUNIT2',
+                'CTYPE1', 'CTYPE2',
+                'CRVAL1', 'CRVAL2',
+                'RADESYS',
+                'EQUINOX',
+        )
+        hdict = {k: self._header[k] for k in keys}
+        hdict['NAXES'] = 2
+        hdict['WCSAXES'] = 2
+        coord_sys = ('ra', 'dec', 'lon', 'lat')
+        assert hdict['CTYPE1'].lower() in coord_sys
+        assert hdict['CTYPE2'].lower() in coord_sys
+        return hdict
+
+    @property
+    def full_header(self):
+        return self._header
 
     def get_spectra(self, i_lon, i_lat):
         data11 = self.cube11[:,i_lat,i_lon]
@@ -259,6 +289,30 @@ class HdfStore:
                 for group_name in chunk_hdf:
                     self.hdf[group_name] = h5py.ExternalLink(chunk_path, group_name)
 
+    @property
+    def is_open(self):
+        try:
+            self.hdf.mode
+            return True
+        except ValueError:
+            # If the HDF file is closed, it will raise an exception stating
+            # "ValueError: Not a file (not a file)"
+            return False
+
+    def insert_header(self, stack):
+        if self.is_open:
+            sh_g = self.hdf.create_group('simple_header')
+            for k, v in stack.simple_header.items():
+                sh_g.attrs[k] = v
+            fh_g = self.hdf.create_group('full_header')
+            for k, v in stack.full_header.items():
+                fh_g.attrs[k] = v
+        else:
+            warnings.warn(
+                    'Could not insert header: the HDF5 file is closed.',
+                    category=RuntimeWarning,
+            )
+
 
 class MappableFitter:
     def __init__(self, stack, utrans, lnZ_thresh=11, ncomp_max=3,
@@ -309,7 +363,7 @@ def get_multiproc_indices(shape, nproc):
 def fit_cube(stack, utrans, store_name='run/test_cube', nproc=1):
     n_chan, n_lat, n_lon = stack.shape
     store = HdfStore(store_name, nchunks=nproc)
-    # FIXME insert cube stack header information into hdf store
+    store.insert_header(stack)
     mappable = MappableFitter(stack, utrans)
     # create list of indices for each process
     indices = get_multiproc_indices(stack.spatial_shape, nproc)
