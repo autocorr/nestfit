@@ -150,9 +150,11 @@ cdef class AmmoniaSpectrum:
         self.nu_chan = nu_chan
         self.nu_min = xarr[0]
         self.nu_max = xarr[self.size-1]
-        self.pred = np.empty_like(data)
-        self.tarr = np.empty_like(data)
+        self.pred = np.zeros_like(data)
+        self.tarr = np.zeros_like(data)
         self.prefactor = -self.size / 2 * np.log(2 * np.pi * noise**2)
+        # note that `pred` is zeros when this is calculated, it is simply the
+        # computed likelihood of a "zero constant" model or "null model"
         self.null_lnZ = self.loglikelihood()
 
     cdef double loglikelihood(self) nogil:
@@ -467,8 +469,11 @@ cdef class AmmoniaRunner(Runner):
         PriorTransformer utrans
         AmmoniaSpectrum s11, s22
     cdef readonly:
+        list par_names
         int ncomp, n_params, ndim, n_chan_tot
         double null_lnZ
+    cdef public:
+        double run_lnZ
 
     def __init__(self, spectra, utrans, ncomp=1):
         """
@@ -489,6 +494,7 @@ cdef class AmmoniaRunner(Runner):
             zero.
         """
         assert ncomp > 0
+        self.par_names = ['voff', 'trot', 'tex', 'ntot', 'sigm']
         self.s11 = spectra[0]
         self.s22 = spectra[1]
         self.utrans = utrans
@@ -497,6 +503,7 @@ cdef class AmmoniaRunner(Runner):
         self.ndim = self.n_params
         self.null_lnZ = self.s11.null_lnZ + self.s22.null_lnZ
         self.n_chan_tot = self.s11.size + self.s22.size
+        self.run_lnZ = np.nan
 
     cpdef double loglikelihood(self, object utheta, int ndim, int n_params):
         cdef:
@@ -516,11 +523,11 @@ cdef class AmmoniaRunner(Runner):
         lnL[0] = self.s11.loglikelihood() + self.s22.loglikelihood()
 
 
-def check_hdf5_ext(store_name):
-    if store_name.endswith('.hdf5'):
+def check_hdf_ext(store_name):
+    if store_name.endswith('.hdf'):
         return store_name
     else:
-        return f'{store_name}.hdf5'
+        return f'{store_name}.hdf'
 
 
 cdef class Dumper:
@@ -533,7 +540,7 @@ cdef class Dumper:
 
     def __init__(self, group_name, store_name='results', no_dump=False):
         self.group_name = group_name
-        self.store_name = check_hdf5_ext(store_name)
+        self.store_name = check_hdf_ext(store_name)
         self.no_dump = no_dump
         self.n_calls = 0
         self.n_samples = -1
@@ -597,12 +604,14 @@ cdef void mn_dump(int *n_samples, int *n_live, int *n_params,
     if dumper.no_dump:
         return
     # Final call, write out parameters to HDF5 file.
+    runner.run_lnZ = lnZ[0]
     with h5py.File(dumper.store_name, 'a') as hdf:
         group = hdf.create_group(dumper.group_name)
         # run and spectrum atttributes
         group.attrs['ncomp']      = runner.ncomp
         group.attrs['null_lnZ']   = runner.null_lnZ
         group.attrs['n_chan_tot'] = runner.n_chan_tot
+        group.attrs['par_names']  = runner.par_names
         # nested sampling attributes:
         group.attrs['n_samples']      = n_samples[0]
         group.attrs['n_live']         = n_live[0]
@@ -610,7 +619,8 @@ cdef void mn_dump(int *n_samples, int *n_live, int *n_params,
         group.attrs['global_lnZ']     = lnZ[0]
         group.attrs['global_lnZ_err'] = lnZ_err[0]
         group.attrs['max_loglike']    = max_loglike[0]
-        group.attrs['marginal_cols']  = dumper.marginal_cols
+        group.attrs['marg_cols']      = dumper.marginal_cols
+        group.attrs['marg_quantiles'] = dumper.quantiles
         # information criteria
         n = runner.n_chan_tot
         k = runner.n_params
