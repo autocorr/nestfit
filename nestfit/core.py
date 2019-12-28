@@ -3,6 +3,11 @@
 Spectral line decomposition using Nested Sampling.
 """
 
+import os
+# NOTE This is a hack to avoid pecular file locking issues for the
+# externally linked chunk files on the NRAO's `lustre` filesystem.
+os.environ['HDF5_USE_FILE_LOCKING'] = 'FALSE'
+
 import shutil
 import warnings
 import multiprocessing
@@ -22,8 +27,7 @@ from astropy import units as u
 from .wrapped import (
         amm11_predict, amm22_predict,
         Prior, OrderedPrior, PriorTransformer,
-        AmmoniaSpectrum, AmmoniaRunner,
-        Dumper, run_multinest,
+        AmmoniaSpectrum, AmmoniaRunner, Dumper, run_multinest,
 )
 
 
@@ -252,7 +256,7 @@ class DataCube:
 
 class CubeStack:
     def __init__(self, cubes):
-        assert cubes is not None
+        assert cubes
         self.cubes = cubes
         self.n_cubes = len(cubes)
 
@@ -296,6 +300,7 @@ class HdfStore:
     def __init__(self, name, nchunks=1):
         self.store_name = name
         self.store_dir = Path(check_ext(self.store_name, ext='store'))
+        # FIXME Perform error handling for if HDF file is already open
         if self.store_dir.exists():
             self.hdf = h5py.File(self.store_dir / self.linked_table, 'a')
             self.nchunks = self.hdf.attrs['nchunks']
@@ -306,10 +311,7 @@ class HdfStore:
             self.nchunks = nchunks
             for chunk_name in self.chunk_names:
                 with h5py.File(chunk_name, 'w') as hdf:
-                    pass
-
-    def __exit__(self, v_type, value, traceback):
-        self.hdf.close()
+                    hdf.flush()
 
     @property
     def chunk_names(self):
@@ -321,28 +323,45 @@ class HdfStore:
 
     @property
     def is_open(self):
+        # If the HDF file is closed, it will raise an exception stating
+        # "ValueError: Not a file (not a file)"
         try:
             self.hdf.mode
             return True
         except ValueError:
-            # If the HDF file is closed, it will raise an exception stating
-            # "ValueError: Not a file (not a file)"
             return False
 
-    def iter_groups(self):
-        for group_name in self.hdf:
-            if group_name is None:
-                raise ValueError('Group name is `None`: likely broken soft link in HDF')
-            group = hdf[group_name]
-            if not isinstance(group, h5py.Group):
-                continue
-            yield group
+    def close(self):
+        self.hdf.flush()
+        self.hdf.close()
+
+    def iter_pix_groups(self):
+        for lon_pix in self.hdf['/pix']:
+            if lon_pix is None:
+                raise ValueError(f'Broken external HDF link: /pix/{lon_pix}')
+            for lat_pix in self.hdf[f'/pix/{lon_pix}']:
+                if lat_pix is None:
+                    raise ValueError(f'Broken external HDF link: /pix/{lon_pix}/{lat_pix}')
+                group = self.hdf[f'/pix/{lon_pix}/{lat_pix}']
+                if not isinstance(group, h5py.Group):
+                    continue
+                yield group
 
     def link_files(self):
+        assert self.is_open
         for chunk_path in self.chunk_names:
             with h5py.File(chunk_path, 'r') as chunk_hdf:
-                for group_name in chunk_hdf:
-                    self.hdf[group_name] = h5py.ExternalLink(chunk_path, group_name)
+                for lon_pix in chunk_hdf['/pix']:
+                    for lat_pix in chunk_hdf[f'/pix/{lon_pix}']:
+                        group_name = f'/pix/{lon_pix}/{lat_pix}'
+                        group = h5py.ExternalLink(chunk_path.name, group_name)
+                        self.hdf[group_name] = group
+                self.hdf.flush()
+
+    def reset_pix_links(self):
+        assert self.is_open
+        if '/pix' in self.hdf:
+            del self.hdf['/pix']
 
     def insert_header(self, stack):
         if self.is_open:
@@ -360,14 +379,22 @@ class HdfStore:
                     category=RuntimeWarning,
             )
 
-    def insert_fitter_pars(self, mappable):
+    def create_dataset(self, dset_name, data, group='', clobber=True):
+        assert len(dset_name) > 0
+        path = f'{group.rstrip("/")}/{dset_name}'
+        if path in self.hdf and clobber:
+            warnings.warn(f'Deleting dataset "{path}"', RuntimeWarning)
+            del self.hdf[path]
+        return self.hdf[group].create_dataset(dset_name, data=data)
+
+    def insert_fitter_pars(self, fitter):
         assert self.is_open
-        self.hdf.attrs['lnZ_threshold'] = mappable.lnZ_thresh
-        self.hdf.attrs['n_max_components'] = mappable.ncomp_max
-        self.hdf.attrs['multinest_kwargs'] = str(mappable.mn_kwargs)
+        self.hdf.attrs['lnZ_threshold'] = fitter.lnZ_thresh
+        self.hdf.attrs['n_max_components'] = fitter.ncomp_max
+        self.hdf.attrs['multinest_kwargs'] = str(fitter.mn_kwargs)
 
 
-class MappableFitter:
+class CubeFitter:
     mn_default_kwargs = {
             'nlive':    60,
             'tol':     1.0,
@@ -387,121 +414,162 @@ class MappableFitter:
         (all_lon, all_lat), store_path = args
         for (i_lon, i_lat) in zip(all_lon, all_lat):
             spectra, has_nans = self.stack.get_spectra(i_lon, i_lat)
-            # FIXME replace with logging framework
             if has_nans:
-                print(f':: ({i_lon}, {i_lat}) SKIP: has NaN values')
+                # FIXME replace with logging framework
+                print(f'-- ({i_lon}, {i_lat}) SKIP: has NaN values')
                 continue
-            group_name = f'pix_{i_lon}_{i_lat}'
-            old_lnZ = -1e100
-            new_lnZ = AmmoniaRunner(spectra, self.utrans, 1).null_lnZ
-            assert np.isfinite(new_lnZ)
-            ncomp = 0
+            group_name = f'pix/{i_lon}/{i_lat}'
+            ncomp = 1
+            nbest = 0
+            old_lnZ = AmmoniaRunner(spectra, self.utrans, 1).null_lnZ
+            assert np.isfinite(old_lnZ)
             # Iteratively fit additional components until they no longer
             # produce a significant increase in the evidence.
-            while new_lnZ - old_lnZ > self.lnZ_thresh:
-                if ncomp == self.ncomp_max:
-                    break
-                ncomp += 1
-                print(f':: ({i_lon}, {i_lat}) -> N = {ncomp}')
+            while ncomp <= self.ncomp_max:
+                print(f'-- ({i_lon}, {i_lat}) -> N = {ncomp}')
                 sub_group_name = f'{group_name}/{ncomp}'
                 dumper = Dumper(sub_group_name, store_name=str(store_path))
                 runner = AmmoniaRunner(spectra, self.utrans, ncomp)
                 # FIXME needs right kwargs for a given ncomp
                 run_multinest(runner, dumper, **self.mn_kwargs)
                 assert np.isfinite(runner.run_lnZ)
-                old_lnZ, new_lnZ = new_lnZ, runner.run_lnZ
+                if runner.run_lnZ - old_lnZ < self.lnZ_thresh:
+                    break
+                else:
+                    old_lnZ = runner.run_lnZ
+                    nbest = ncomp
+                    ncomp += 1
             with h5py.File(store_path, 'a') as hdf:
                 group = hdf[group_name]
                 group.attrs['i_lon'] = i_lon
                 group.attrs['i_lat'] = i_lat
-                group.attrs['nbest'] = ncomp - 1
+                group.attrs['nbest'] = nbest
+
+    def fit_cube(self, store_name='run/test_cube', nproc=1):
+        n_chan, n_lat, n_lon = self.stack.shape
+        store = HdfStore(store_name, nchunks=nproc)
+        store.insert_header(self.stack)
+        store.insert_fitter_pars(self)
+        # create list of indices for each process
+        indices = get_multiproc_indices(self.stack.spatial_shape, store.nchunks)
+        if store.nchunks == 1:
+            self.fit(indices[0], store.chunk_names[0])
+        else:
+            # NOTE A simple `multiprocessing.Pool` cannot be used because the
+            # Cython C-extensions cannot be pickled without effort to implement
+            # the pickling protocol on all classes.
+            # NOTE `mpi4py` may be more appropriate here, but it is more complex
+            # FIXME no error handling if a process fails/raises an exception
+            sequence = list(zip(indices, store.chunk_names))
+            procs = [
+                    multiprocessing.Process(target=self.fit, args=args)
+                    for args in sequence
+            ]
+            for proc in procs:
+                proc.start()
+            for proc in procs:
+                proc.join()
+        # link all of the HDF5 files together
+        store.link_files()
+        store.close()
+
 
 
 def get_multiproc_indices(shape, nproc):
-    lat_ix, lon_ix = np.indices(shape)
+    lon_ix, lat_ix = np.indices(shape)
     indices = [
-            (lon_ix[...,i::nproc].flatten(), lat_ix[...,i::nproc].flatten())
+            (lon_ix[i::nproc,...].flatten(), lat_ix[i::nproc,...].flatten())
             for i in range(nproc)
     ]
     return indices
 
 
-def fit_cube(stack, utrans, store_name='run/test_cube', nproc=1):
-    n_chan, n_lat, n_lon = stack.shape
-    mappable = MappableFitter(stack, utrans)
-    store = HdfStore(store_name, nchunks=nproc)
-    store.insert_header(stack)
-    store.insert_fitter_pars(mappable)
-    # create list of indices for each process
-    indices = get_multiproc_indices(stack.spatial_shape, nproc)
-    if nproc == 1:
-        mappable.fit(indices[0], store.chunk_names[0])
-    else:
-        # spawn processes and process cube
-        # NOTE A simple `multiprocessing.Pool` cannot be used because the
-        # Cython C-extensions cannot be pickled without effort to implement
-        # the pickling protocol on all classes.
-        # FIXME no error handling if a process fails/raises an exception
-        sequence = list(zip(indices, store.chunk_names))
-        procs = [
-                multiprocessing.Process(target=mappable.fit, args=args)
-                for args in sequence
-        ]
-        for proc in procs:
-            proc.start()
-        for proc in procs:
-            proc.join()
-    # link all of the HDF5 files together
-    store.link_files()
+def get_test_cubestack():
+    # NOTE hack in indexing because last channel is all NaN's
+    cube11 = spectral_cube.SpectralCube.read('data/test_cube_11.fits')[:-1,155:195,155:195]
+    cube22 = spectral_cube.SpectralCube.read('data/test_cube_22.fits')[:-1,155:195,155:195]
+    cubes = (DataCube(cube11, noise=0.35), DataCube(cube22, noise=0.35))
+    stack = CubeStack(cubes)
+    return stack
 
 
 def test_fit_cube(store_name='run/test_cube_multin'):
     store_filen = f'{store_name}.store'
     if Path(store_filen).exists():
         shutil.rmtree(store_filen)
-    cube11 = spectral_cube.SpectralCube.read('data/test_cube_11.fits')[:-1,155:195,155:195]
-    cube22 = spectral_cube.SpectralCube.read('data/test_cube_22.fits')[:-1,155:195,155:195]
-    cubes = (DataCube(cube11, noise=0.35), DataCube(cube22, noise=0.35))
-    stack = CubeStack(cubes)
-    utrans = get_irdc_priors(vsys=63.7)
-    fit_cube(stack, utrans, store_name=store_name, nproc=8)
+    stack = get_test_cubestack()
+    utrans = get_irdc_priors(vsys=63.7)  # correct for G23481 data
+    fitter = CubeFitter(stack, utrans, ncomp_max=3)
+    fitter.fit_cube(store_name=store_name, nproc=8)
 
 
-def marginals_to_ndcube(store):
+def aggregate_store_products(store, prod_name='independent'):
+    """
+    Aggregate the results from the individual per-pixel Nested Sampling runs
+    into dense arrays of the product values.
+
+    Parameters
+    ----------
+    store : HdfStore
+    prod_name : str
+        Name of sub-group to store the products in within the "aggregate"
+        group.
+    """
+    # TODO the aggregator should have a prefix to select what HDF groups are
+    # getting aggregated
     hdf = store.hdf
     n_lat = hdf.attrs['naxis1']
     n_lon = hdf.attrs['naxis2']
     # get list of parameters out of cube
     # get list of marginal percentiles
     ncomp_max = hdf.attrs['n_max_components']
-    n_params  = hdf['pix_0_0/1'].attrs['n_params']
-    par_names = hdf['pix_0_0/1'].attrs['par_names']
-    marg_cols = hdf['pix_0_0/1'].attrs['marg_cols']
-    marg_quan = hdf['pix_0_0/1'].attrs['marg_quantiles']
+    test_group = 'pix/0/0/1'  # FIXME
+    n_params  = hdf[test_group].attrs['n_params']
+    par_names = hdf[test_group].attrs['par_names']
+    marg_cols = hdf[test_group].attrs['marg_cols']
+    marg_quan = hdf[test_group].attrs['marg_quantiles']
     n_margs   = len(marg_cols)
-    # dimensions (l, b, M, p, m) for
+    # dimensions (l, b) for Nbest map
+    nbest_img = np.empty((n_lon, n_lat), dtype=np.int64)
+    nbest_img[...] = np.nan
+    # dimensions (l, b, p, m) for MAP-parameter values
+    #   (latitude, longitude, parameter, model)
+    mapdata = np.empty((n_lon, n_lat, n_params, ncomp_max))
+    mapdata[...] = np.nan
+    # dimensions (l, b, M, p, m) for posterior distribution marginals
     #   (latitude, longitude, marginal, parameter, model)
     # in C order, the right-most index varies the fastest
     pardata = np.empty((n_lon, n_lat, n_margs, n_params, ncomp_max))
     pardata[...] = np.nan
     # aggregate marginals into pardata
-    for group in store.iter_groups():
-        # TODO do similar agg/reshape for best-fit params
+    for group in store.iter_pix_groups():
         i_lon = group.attrs['i_lon']
         i_lat = group.attrs['i_lat']
+        print(f'-- ({i_lon}, {i_lat}) aggregating values')
         nbest = group.attrs['nbest']
         nb_group = group[f'{nbest}']
-        shape = (n_margs, n_params, nbest)
-        # convert the marginals output 2D array for:
+        nbest_img[i_lon,i_lat] = nbest
+        # convert MAP params from 1D array to 2D for:
+        #   (p*m) -> (p, m)
+        p_shape = (n_params, nbest)
+        mapvs = nb_group['map_params'][...].reshape(p_shape)
+        mapdata[i_lon,i_lat,:p_shape[0],:p_shape[1]] = mapvs
+        # convert the marginals output 2D array to 3D for:
         #   (M, p*m) -> (M, p, m)
-        margs = nb_group['marginals'][...].reshape(shape)
-        pardata[i_lon,i_lat,:shape[0],:shape[1],:shape[2]] = margs
+        m_shape = (n_margs, n_params, nbest)
+        margs = nb_group['marginals'][...].reshape(m_shape)
+        pardata[i_lon,i_lat,:m_shape[0],:m_shape[1],:m_shape[2]] = margs
     # transpose to dimensions (m, p, M, b, l) and then keep multi-dimensional
     # parameter cube in the HDF5 file at the native dimensions
-    pardata = pardata.transpose()
-    hdf.create_dataset('nbest_marginal_cube', data=pardata)
-    # FIXME
-    # create header, reshape, then store as FITS
+    dpath = f'/aggregate/{prod_name.rstrip("/")}'
+    store.hdf.require_group(dpath)
+    store.create_dataset('nbest_image', nbest_img.transpose(), group=dpath)
+    store.create_dataset('nbest_MAP_cube', mapdata.transpose(), group=dpath)
+    store.create_dataset('nbest_marginals_cube', pardata.transpose(), group=dpath)
+
+
+def store_products_to_fits(store, prod_group='indep'):
+    # TODO create header, reshape, and store as FITS
     #fits_header = fits.Header()
     #header_group = hdf['simple_header']
     #n_newax = n_margs * n_params * ncomp_max
@@ -520,6 +588,7 @@ def marginals_to_ndcube(store):
     ## copy header and edit for 3-axis parameter cube
     #hdu = fits.PrimaryHDU(data=fits_data, header=fits_header)
     #hdu.writeto(f'{hdf.store_name}_marginals.fits')
+    pass
 
 
 def test_pyspeckit_profiling_compare(n=100):
