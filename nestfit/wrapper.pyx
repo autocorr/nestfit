@@ -6,8 +6,6 @@
 
 cimport cython
 
-import h5py
-
 import numpy as np
 cimport numpy as np
 np.import_array()
@@ -496,6 +494,8 @@ cdef class AmmoniaRunner(Runner):
         null_lnZ : number
             Natural log evidence for the "null model" of a constant equal to
             zero.
+        run_lnZ : number
+            Natural log global evidence from the MultiNest run.
         """
         assert ncomp > 0
         self.par_names = ['voff', 'trot', 'tex', 'ntot', 'sigm']
@@ -527,24 +527,24 @@ cdef class AmmoniaRunner(Runner):
         lnL[0] = self.s11.loglikelihood() + self.s22.loglikelihood()
 
 
-def check_hdf_ext(store_name):
-    if store_name.endswith('.hdf'):
-        return store_name
-    else:
-        return f'{store_name}.hdf'
-
-
 cdef class Dumper:
     cdef:
-        str group_name, store_name
+        object group
         bint no_dump
         int n_calls, n_samples
         double[::1] quantiles
         list marginal_cols
 
-    def __init__(self, group_name, store_name='results', no_dump=False):
-        self.group_name = group_name
-        self.store_name = check_hdf_ext(store_name)
+    def __init__(self, group, no_dump=False):
+        """
+        Parameters
+        ----------
+        group : h5py.Group
+            HDF5 group instance which to write the MultiNest output
+        no_dump : bool, default False
+            Do not write output data to group, used for debugging purposes.
+        """
+        self.group = group
         self.no_dump = no_dump
         self.n_calls = 0
         self.n_samples = -1
@@ -564,16 +564,12 @@ cdef class Dumper:
         return np.quantile(posteriors[:,:-2], self.quantiles, axis=0)
 
     def append_attributes(self, **kwargs):
-        with h5py.File(self.store_name, 'a') as hdf:
-            group = hdf[self.group_name]
-            for name, value in kwargs.items():
-                group.attrs[name] = value
+        for name, value in kwargs.items():
+            self.group.attrs[name] = value
 
     def append_datasets(self, **kwargs):
-        with h5py.File(self.store_name, 'a') as hdf:
-            group = hdf[self.group_name]
-            for name, data in kwargs.items():
-                group.create_dataset(name, data=data)
+        for name, data in kwargs.items():
+            self.group.create_dataset(name, data=data)
 
 
 cdef class Context:
@@ -609,49 +605,48 @@ cdef void mn_dump(int *n_samples, int *n_live, int *n_params,
         return
     # Final call, write out parameters to HDF5 file.
     runner.run_lnZ = lnZ[0]
-    with h5py.File(dumper.store_name, 'a') as hdf:
-        group = hdf.create_group(dumper.group_name)
-        # run and spectrum atttributes
-        group.attrs['ncomp']      = runner.ncomp
-        group.attrs['null_lnZ']   = runner.null_lnZ
-        group.attrs['n_chan_tot'] = runner.n_chan_tot
-        group.attrs['par_names']  = runner.par_names
-        # nested sampling attributes:
-        group.attrs['n_samples']      = n_samples[0]
-        group.attrs['n_live']         = n_live[0]
-        group.attrs['n_params']       = n_params[0]
-        group.attrs['global_lnZ']     = lnZ[0]
-        group.attrs['global_lnZ_err'] = lnZ_err[0]
-        group.attrs['max_loglike']    = max_loglike[0]
-        group.attrs['marg_cols']      = dumper.marginal_cols
-        group.attrs['marg_quantiles'] = dumper.quantiles
-        # information criteria
-        n = runner.n_chan_tot
-        k = runner.n_params
-        maxL = max_loglike[0]
-        bic  = np.log(n) * k - 2 * maxL
-        aic  = 2 * k - 2 * maxL
-        aicc = aic + (2 * k**2 + 2 * k) / (n - k - 1)
-        group.attrs['BIC']  = bic
-        group.attrs['AIC']  = aic
-        group.attrs['AICc'] = aicc
-        # posterior samples
-        post_shape = (n_samples[0], n_params[0]+2)
-        post_arr = mn_dptr_to_ndarray(posterior, post_shape)
-        group.create_dataset('posteriors', data=post_arr)
-        group.create_dataset('marginals', data=dumper.calc_marginals(post_arr))
-        # posterior statistics
-        pcon_shape = (1, 4*n_params[0])
-        pcon_arr = mn_dptr_to_ndarray(param_constr, pcon_shape)
-        pcon_arr = pcon_arr.reshape(4, n_params[0])
-        group.create_dataset('bestfit_params', data=pcon_arr[2])
-        group.create_dataset('map_params', data=pcon_arr[3])
+    group = dumper.group
+    # run and spectrum atttributes
+    group.attrs['ncomp']      = runner.ncomp
+    group.attrs['null_lnZ']   = runner.null_lnZ
+    group.attrs['n_chan_tot'] = runner.n_chan_tot
+    group.attrs['par_names']  = runner.par_names
+    # nested sampling attributes:
+    group.attrs['n_samples']      = n_samples[0]
+    group.attrs['n_live']         = n_live[0]
+    group.attrs['n_params']       = n_params[0]
+    group.attrs['global_lnZ']     = lnZ[0]
+    group.attrs['global_lnZ_err'] = lnZ_err[0]
+    group.attrs['max_loglike']    = max_loglike[0]
+    group.attrs['marg_cols']      = dumper.marginal_cols
+    group.attrs['marg_quantiles'] = dumper.quantiles
+    # information criteria
+    n = runner.n_chan_tot
+    k = runner.n_params
+    maxL = max_loglike[0]
+    bic  = np.log(n) * k - 2 * maxL
+    aic  = 2 * k - 2 * maxL
+    aicc = aic + (2 * k**2 + 2 * k) / (n - k - 1)
+    group.attrs['BIC']  = bic
+    group.attrs['AIC']  = aic
+    group.attrs['AICc'] = aicc
+    # posterior samples
+    post_shape = (n_samples[0], n_params[0]+2)
+    post_arr = mn_dptr_to_ndarray(posterior, post_shape)
+    group.create_dataset('posteriors', data=post_arr)
+    group.create_dataset('marginals', data=dumper.calc_marginals(post_arr))
+    # posterior statistics
+    pcon_shape = (1, 4*n_params[0])
+    pcon_arr = mn_dptr_to_ndarray(param_constr, pcon_shape)
+    pcon_arr = pcon_arr.reshape(4, n_params[0])
+    group.create_dataset('bestfit_params', data=pcon_arr[2])
+    group.create_dataset('map_params', data=pcon_arr[3])
 
 
 cdef np.ndarray mn_dptr_to_ndarray(double **data, tuple shape):
     """
     Create a numpy array view of the memory pointed to by MultiNest.  The numpy
-    C-API is used to construct a ndarray directly with attributes appropriate
+    C-API is used to construct an ndarray directly with attributes appropriate
     for the `posterior` and `param_constr` data (2D, Fortran-ordered,
     double/float64). Note that the memory mapped by these views will be freed
     when MultiNest returns.

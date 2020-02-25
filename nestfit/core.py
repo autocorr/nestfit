@@ -81,14 +81,16 @@ def get_irdc_priors(size=500, vsys=0.0):
     return PriorTransformer(priors)
 
 
-def test_nested(ncomp=2):
+def test_nested(ncomp=2, prefix='test'):
     synspec = get_test_spectra()
     spectra = [syn.to_ammspec() for syn in synspec]
     utrans = get_irdc_priors(vsys=0)
-    dumper = Dumper(f'001/{ncomp}', store_name='test', no_dump=True)
-    runner = AmmoniaRunner(spectra, utrans, ncomp)
-    run_multinest(runner, dumper, nlive=60, seed=5, tol=1.0, efr=0.3,
-            updInt=2000)
+    with h5py.File('test.hdf', 'a') as hdf:
+        group = hdf.create_group(f'{prefix}/{ncomp}')
+        dumper = Dumper(group)
+        runner = AmmoniaRunner(spectra, utrans, ncomp)
+        run_multinest(runner, dumper, nlive=60, seed=5, tol=1.0, efr=0.3,
+                updInt=2000)
     return synspec, spectra, runner
 
 
@@ -206,31 +208,33 @@ def check_ext(store_name, ext='hdf'):
 
 class HdfStore:
     linked_table = Path('table.hdf')
-    chunk_filen = 'chunk'
+    chunk_prefix = 'chunk'
 
-    def __init__(self, name, nchunks=1):
-        self.store_name = name
+    def __init__(self, store_name, nchunks=1):
+        """
+        Parameters
+        ----------
+        store_name : str
+        nchunks : int
+        """
+        self.store_name = store_name
         self.store_dir = Path(check_ext(self.store_name, ext='store'))
         # FIXME Perform error handling for if HDF file is already open
+        self.hdf = h5py.File(self.store_dir / self.linked_table, 'a')
         if self.store_dir.exists():
-            self.hdf = h5py.File(self.store_dir / self.linked_table, 'a')
             self.nchunks = self.hdf.attrs['nchunks']
         else:
             self.store_dir.mkdir()
-            self.hdf = h5py.File(self.store_dir / self.linked_table, 'a')
             self.hdf.attrs['nchunks'] = nchunks
             self.nchunks = nchunks
-            for chunk_name in self.chunk_names:
-                with h5py.File(chunk_name, 'w') as hdf:
-                    hdf.flush()
+        self.chunks = [h5py.File(path, 'a') for path in self.chunk_paths]
 
     @property
-    def chunk_names(self):
-        paths = [
-                self.store_dir / Path(f'{self.chunk_filen}{i}.hdf')
+    def chunk_paths(self):
+        return [
+                self.store_dir / Path(f'{self.chunk_prefix}{i}.hdf')
                 for i in range(self.nchunks)
         ]
-        return paths
 
     @property
     def is_open(self):
@@ -242,11 +246,27 @@ class HdfStore:
         except ValueError:
             return False
 
+    @property
+    def chunks_open(self):
+        for chunk_hdf in self.chunks:
+            try:
+                chunk_hdf.mode
+            except ValueError:
+                print(f'-- {chunk_hdf.filename} closed')
+                return False
+        return True
+
     def close(self):
-        self.hdf.flush()
-        self.hdf.close()
+        if self.is_open:
+            self.hdf.flush()
+            self.hdf.close()
+        if self.chunks_open:
+            for chunk_hdf in self.chunks:
+                chunk_hdf.flush()
+                chunk_hdf.close()
 
     def iter_pix_groups(self):
+        assert self.is_open
         for lon_pix in self.hdf['/pix']:
             if lon_pix is None:
                 raise ValueError(f'Broken external HDF link: /pix/{lon_pix}')
@@ -260,14 +280,15 @@ class HdfStore:
 
     def link_files(self):
         assert self.is_open
-        for chunk_path in self.chunk_names:
-            with h5py.File(chunk_path, 'r') as chunk_hdf:
-                for lon_pix in chunk_hdf['/pix']:
-                    for lat_pix in chunk_hdf[f'/pix/{lon_pix}']:
-                        group_name = f'/pix/{lon_pix}/{lat_pix}'
-                        group = h5py.ExternalLink(chunk_path.name, group_name)
-                        self.hdf[group_name] = group
-                self.hdf.flush()
+        assert self.chunks_open
+        for chunk_hdf in self.chunks:
+            for lon_pix in chunk_hdf['/pix']:
+                for lat_pix in chunk_hdf[f'/pix/{lon_pix}']:
+                    group_name = f'/pix/{lon_pix}/{lat_pix}'
+                    group = h5py.ExternalLink(chunk_path.name, group_name)
+                    self.hdf[group_name] = group
+            chunk_hdf.flush()
+            self.hdf.flush()
 
     def reset_pix_links(self):
         assert self.is_open
@@ -331,14 +352,15 @@ class CubeFitter:
         self.mn_kwargs = mn_kwargs if mn_kwargs is not None else self.mn_default_kwargs
 
     def fit(self, *args):
-        (all_lon, all_lat), store_path = args
+        (all_lon, all_lat), hdf = args
         for (i_lon, i_lat) in zip(all_lon, all_lat):
             spectra, has_nans = self.stack.get_spectra(i_lon, i_lat)
             if has_nans:
                 # FIXME replace with logging framework
                 print(f'-- ({i_lon}, {i_lat}) SKIP: has NaN values')
                 continue
-            group_name = f'pix/{i_lon}/{i_lat}'
+            group_name = f'/pix/{i_lon}/{i_lat}'
+            group = hdf.require_group(group_name)
             ncomp = 1
             nbest = 0
             old_lnZ = AmmoniaRunner(spectra, self.utrans, 1).null_lnZ
@@ -347,10 +369,10 @@ class CubeFitter:
             # produce a significant increase in the evidence.
             while ncomp <= self.ncomp_max:
                 print(f'-- ({i_lon}, {i_lat}) -> N = {ncomp}')
-                sub_group_name = f'{group_name}/{ncomp}'
-                dumper = Dumper(sub_group_name, store_name=str(store_path))
+                sub_group = group.create_group(f'{ncomp}')
+                dumper = Dumper(sub_group)
                 runner = AmmoniaRunner(spectra, self.utrans, ncomp)
-                # FIXME needs right kwargs for a given ncomp
+                # FIXME needs tuned/specific kwargs for a given ncomp
                 run_multinest(runner, dumper, **self.mn_kwargs)
                 assert np.isfinite(runner.run_lnZ)
                 if runner.run_lnZ - old_lnZ < self.lnZ_thresh:
@@ -359,11 +381,9 @@ class CubeFitter:
                     old_lnZ = runner.run_lnZ
                     nbest = ncomp
                     ncomp += 1
-            with h5py.File(store_path, 'a') as hdf:
-                group = hdf[group_name]
-                group.attrs['i_lon'] = i_lon
-                group.attrs['i_lat'] = i_lat
-                group.attrs['nbest'] = nbest
+            group.attrs['i_lon'] = i_lon
+            group.attrs['i_lat'] = i_lat
+            group.attrs['nbest'] = nbest
 
     def fit_cube(self, store_name='run/test_cube', nproc=1):
         n_chan, n_lat, n_lon = self.stack.shape
@@ -373,14 +393,14 @@ class CubeFitter:
         # create list of indices for each process
         indices = get_multiproc_indices(self.stack.spatial_shape, store.nchunks)
         if store.nchunks == 1:
-            self.fit(indices[0], store.chunk_names[0])
+            self.fit(indices[0], store.chunks[0])
         else:
             # NOTE A simple `multiprocessing.Pool` cannot be used because the
             # Cython C-extensions cannot be pickled without implementing the
             # pickling protocol on all classes.
             # NOTE `mpi4py` may be more appropriate here, but it is more complex
             # FIXME no error handling if a process fails/raises an exception
-            sequence = list(zip(indices, store.chunk_names))
+            sequence = list(zip(indices, store.chunks))
             procs = [
                     multiprocessing.Process(target=self.fit, args=args)
                     for args in sequence
