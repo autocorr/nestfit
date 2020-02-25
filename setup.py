@@ -13,7 +13,8 @@ MNEST_DIR = Path('/users/bsvoboda/code/MultiNest')
 
 ext = Extension(
         'nestfit.wrapped',
-        ['nestfit/wrapper.pyx', 'nestfit/fastexp.c'],
+        ['nestfit/wrapper.pyx', 'nestfit/test/test_wrapper.pyx',
+            'nestfit/fastexp.c'],
         libraries=['m', 'multinest'],
         include_dirs=[np.get_include(), str(MNEST_DIR/'include'), 'nestfit'],
         library_dirs=[str(MNEST_DIR/'lib')],

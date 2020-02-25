@@ -133,7 +133,8 @@ cdef class AmmoniaSpectrum:
         Parameters
         ----------
         xarr : array
-            x-axis array in Hz.
+            x-axis array in Hz. Note that the frequency axis must be in
+            ascending order.
         data : array
             intensity values in K (brightness temperature).
         noise : number
@@ -389,12 +390,13 @@ cdef class OrderedPrior(Prior):
         #             |--x-|
         umin, umax = 0.0, 1.0
         for i in range(npar*n, (npar+1)*n):
-            u = umin = (umax - umin) * utheta[i] + umin
+            u = umin + (umax - umin) * utheta[i]
+            umin = u
             utheta[i] = self._interp(u)
 
 
 # NOTE This class has not been tested.
-cdef class SeparatedPrior(Prior):
+cdef class SpacedPrior(Prior):
     cdef:
         Prior prior_indep, prior_depen
 
@@ -406,13 +408,15 @@ cdef class SeparatedPrior(Prior):
         cdef:
             int i
             double u
-        utheta[0] = u = self.prior_indep._interp(utheta[0])
+        u = self.prior_indep._interp(utheta[0])
+        utheta[0] = u
         # Draw initial value from independent prior distribution, then
         # draw offsets from the running value from the dependent prior
         # distribution, updated in `u` for (n-1) samples.
         # Note that python will not execute a loop of zero interval
         for i in range(npar*n+1, (npar+1)*n):
-            utheta[i] = u = u + self.prior_depen._interp(utheta[i])
+            u = u + self.prior_depen._interp(utheta[i])
+            utheta[i] = u
 
 
 cdef class PriorTransformer:

@@ -10,6 +10,7 @@ ROOT_DIR = Path('/lustre/aoc/users/bsvoboda/temp/nestfit')
 DATA_DIR = ROOT_DIR / Path('data')
 PLOT_DIR = ROOT_DIR / Path('plots')
 
+
 TEX_LABELS = [
         r'$v_\mathrm{lsr} \ [\mathrm{km\, s^{-1}}]$',
         r'$T_\mathrm{rot} \ [\mathrm{K}]$',

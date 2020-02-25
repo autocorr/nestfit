@@ -7,13 +7,17 @@ from pathlib import Path
 
 import numpy as np
 from scipy import special
-from matplotlib import ticker
+import matplotlib as mpl
 from matplotlib import pyplot as plt
+from mpl_toolkits.axes_grid1 import make_axes_locatable
+from mayavi import mlab as mvi
 
 import corner
+import pyspeckit
+from astropy.wcs import WCS
 
-from nestfit import (get_par_labels, PLOT_DIR)
-from nestfit.main import test_spectra
+from nestfit import (get_par_labels, TEX_LABELS, PLOT_DIR)
+from nestfit.core import (SyntheticSpectrum, get_test_spectra)
 from nestfit.wrapped import (amm11_predict, amm22_predict)
 
 
@@ -23,9 +27,52 @@ plt.rc('xtick', direction='out', top=True)
 plt.rc('ytick', direction='out', right=True)
 
 
+CLR_CMAP = plt.cm.Spectral_r
+CLR_CMAP.set_bad('0.5', 1.0)
+HOT_CMAP = plt.cm.afmhot
+HOT_CMAP.set_bad('0.5', 1.0)
+RDB_CMAP = plt.cm.RdBu
+RDB_CMAP.set_bad('0.5', 1.0)
+VIR_CMAP = plt.cm.viridis
+VIR_CMAP.set_bad('0.5', 1.0)
+
+_cmap_list = [(0.5, 0.5, 0.5, 1.0)] + [plt.cm.plasma(i) for i in range(plt.cm.plasma.N)]
+NBD_CMAP = mpl.colors.LinearSegmentedColormap.from_list(
+        'Discrete Plasma', _cmap_list, len(_cmap_list),
+)
+NBD_CMAP.set_bad('0.2')
+
+
+def save_figure(filen):
+    exts = ('png', 'pdf')
+    for ext in exts:
+        path = PLOT_DIR / Path(f'{filen}.{ext}')
+        plt.savefig(str(path), dpi=300)
+        print(f'-- {ext} saved')
+    plt.close('all')
+    plt.cla()
+    plt.clf()
+
+
+def add_scaled_colorbar(mappable):
+    """
+    NOTE The following code was written by Joseph Long and the original may be
+    found here:
+        https://joseph-long.com/writing/colorbars/
+    """
+    last_axes = plt.gca()
+    ax = mappable.axes
+    fig = ax.figure
+    divider = make_axes_locatable(ax)
+    cax = divider.append_axes("right", size="5%", pad=0.05)
+    cbar = fig.colorbar(mappable, cax=cax)
+    plt.sca(last_axes)
+    return cbar
+
+
 def plot_synth_spectra(spectra=None):
     if spectra is None:
-        spectra = test_spectra()
+        spectra = get_test_spectra()
     fig = plt.figure(figsize=(4, 6))
     ax0 = plt.subplot2grid((3, 1), (0, 0), rowspan=2)
     ax1 = plt.subplot2grid((3, 1), (2, 0))
@@ -103,8 +150,7 @@ def plot_spec_compare(synspec, analyzer, outname='test'):
     #ax1.set_ylabel(r'$\mathrm{Residual\ CDF}$')
     # save figure
     plt.tight_layout()
-    plt.savefig(f'plots/{outname}.pdf')
-    plt.close('all')
+    save_figure(outname)
 
 
 def plot_corner(synspec, analyzer, show_truths=False, outname='test_corner'):
@@ -116,13 +162,112 @@ def plot_corner(synspec, analyzer, show_truths=False, outname='test_corner'):
             labels=par_labels, label_kwargs={'fontsize': 14},
             show_titles=True, title_kwargs={'fontsize': 14})
     # save figure
-    plt.savefig(f'plots/{outname}.pdf')
-    plt.close('all')
+    save_figure(outname)
     plt.rc('font', size=10, family='serif')
 
 
+def add_discrete_colorbar(ax, orientation='vertical'):
+    t_cbar = plt.colorbar(ax)
+    t_cbar.ax.clear()
+    bounds = [-0.5, 0.5, 1.5, 2.5, 3.5, 4.5]
+    ticks  = [0, 1, 2, 3, 4]
+    norm  = mpl.colors.BoundaryNorm(bounds, NBD_CMAP.N)
+    cbar = mpl.colorbar.ColorbarBase(t_cbar.ax, cmap=NBD_CMAP, norm=norm,
+            boundaries=bounds, ticks=ticks, spacing='uniform', orientation=orientation)
+    return cbar
+
+
+def plot_agg_nbest(store, group='/aggregate/independent/nbest_image',
+        outname='nbest'):
+    data = store.hdf[group]
+    wcs = WCS(store.read_header(full=False))
+    fig, ax = plt.subplots(figsize=(4, 3.3), subplot_kw={'projection': wcs})
+    im = ax.imshow(data, vmin=0, vmax=4, cmap=NBD_CMAP)
+    cbar = add_discrete_colorbar(im)
+    cbar.set_label(r'$N_\mathrm{best}$')
+    ax.set_xlabel(r'$\mathrm{Right\ Ascension\ (J2000)}$')
+    ax.set_ylabel(r'$\mathrm{Declination\ (J2000)}$', labelpad=-0.8)
+    plt.tight_layout()
+    plt.subplots_adjust(left=0.20, right=0.95, bottom=0.15, top=0.95)
+    save_figure(f'{outname}')
+
+
+def plot_map_props(store, group='/aggregate/independent/nbest_MAP_cube',
+        outname='map_props'):
+    data = store.hdf[group][...]
+    n_mod, n_params, _, _ = data.shape
+    wcs = WCS(store.read_header(full=False))
+    # iterate through properties
+    for ii in range(n_params):
+        fig, axes = plt.subplots(nrows=1, ncols=n_mod, figsize=(8, 2.8),
+                subplot_kw={'projection': wcs})
+        for jj, ax in enumerate(axes):
+            img = data[jj, ii, :, :]
+            im = ax.imshow(img, cmap=CLR_CMAP)
+            if not ax.is_first_col():
+                ax.tick_params(axis='y', labelleft=False)
+        cax = fig.add_axes([0.89, 0.20, 0.015, 0.70])
+        cbar = plt.colorbar(im, cax=cax)
+        cbar.minorticks_on()
+        cbar.set_label(TEX_LABELS[ii])
+        axes[0].set_xlabel(r'$\mathrm{Right\ Ascension\ (J2000)}$')
+        axes[0].set_ylabel(r'$\mathrm{Declination\ (J2000)}$', labelpad=-0.8)
+        plt.tight_layout()
+        plt.subplots_adjust(left=0.10, right=0.875, bottom=0.15, top=0.95)
+        save_figure(f'{outname}_par{ii}')
+
+
+def plot_3d_volume(store, outname='volume_field_contour'):
+    histdata = store.hdf['/aggregate/independent/post_hists'][...]
+    vals = histdata[0,...]
+    vmin, vmax = vals.min(), vals.max()
+    obj = mvi.contour3d(vals, colormap='inferno', transparent=True)
+    mvi.savefig(f'plots/{outname}.pdf')
+    mvi.clf()
+
+
+def plot_specfit(store, stack, pix, n_model=1, outname='specfit'):
+    lon_pix, lat_pix = pix
+    group = store.hdf[f'/pix/{lon_pix}/{lat_pix}/{n_model}']
+    params = group['map_params'][...]
+    spectra = stack.get_arrays(*pix)
+    freq_dict = pyspeckit.spectrum.models.ammonia.freq_dict
+    rest_freqs = (freq_dict['oneone'], freq_dict['twotwo'])
+    xarrs = [
+            pyspeckit.spectrum.units.SpectroscopicAxis(cube.xarr, unit='Hz',
+                refX=rest_freqs[i], refX_unit='Hz',
+                velocity_convention='radio')
+            for i, cube in enumerate(stack.cubes)
+    ]
+    synspectra = [SyntheticSpectrum(x, params) for x in xarrs]
+    fig = plt.figure(figsize=(4, 5))
+    ax0 = plt.subplot2grid((3, 1), (0, 0), rowspan=2)
+    ax1 = plt.subplot2grid((3, 1), (2, 0))
+    axes = (ax0, ax1)
+    #fig, axes = plt.subplots(nrows=len(spectra), ncols=1,
+    #        sharex=True, sharey=True, figsize=(4, 5))
+    for data, xarr, synspec, ax in zip(spectra, xarrs, synspectra, axes):
+        varr = synspec.varr
+        ax.fill_between(varr, data, np.zeros_like(data), color='yellow',
+                edgecolor='none', alpha=0.5)
+        ax.plot(varr, data, 'k-', linewidth=0.7, drawstyle='steps-pre')
+        ax.plot(varr, synspec.components.T, '-', color='magenta', linewidth=1.0, alpha=0.5)
+        ax.plot(varr, synspec.sum_spec, '-', color='red', linewidth=1.0)
+        ax.set_xlim(varr.value.min(), varr.value.max())
+    ymin = spectra[0].min() * 1.1
+    ymax = spectra[0].max() * 1.1
+    axes[0].set_ylim(ymin, ymax)
+    axes[1].set_ylim(ymin*0.4-0.5, ymax*0.4-0.5)
+    axes[1].set_xlabel(r'$v_\mathrm{lsr} \ [\mathrm{km\, s^{-1}}]$')
+    axes[1].set_ylabel(r'$T_\mathrm{mb} \ [\mathrm{K}]$')
+    axes[0].annotate(r'$\mathrm{NH_3}\, (1,1)$', (0.03, 0.91), xycoords='axes fraction')
+    axes[1].annotate(r'$\mathrm{NH_3}\, (2,2)$', (0.03, 0.80), xycoords='axes fraction')
+    plt.tight_layout()
+    save_figure(f'{outname}_{lon_pix}_{lat_pix}_{n_model}')
+
+
 def test_wrapped_amm_precision():
-    spectra = test_spectra()
+    spectra = get_test_spectra()
     funcs = (amm11_predict, amm22_predict)
     # plotting
     fig, axes = plt.subplots(nrows=2, sharex=True, sharey=True, figsize=(4, 3))

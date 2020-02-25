@@ -24,115 +24,12 @@ import spectral_cube
 from astropy.io import fits
 from astropy import units as u
 
+from .synth_spectra import get_test_spectra
 from .wrapped import (
         amm11_predict, amm22_predict,
-        Prior, OrderedPrior, PriorTransformer,
+        Prior, OrderedPrior, SpacedPrior, PriorTransformer,
         AmmoniaSpectrum, AmmoniaRunner, Dumper, run_multinest,
 )
-
-
-class SyntheticSpectrum:
-    model_name = 'ammonia'
-
-    def __init__(self, xarr, params, noise=0.03, vsys=0, set_seed=False):
-        """
-        Construct a mixture of ammonia model spectra given parameters:
-            voff : centroid velocity offset from zero
-            trot : rotation temperature
-            tex  : excitation temperature
-            ntot : para-ammonia column density
-            sigm : velocity dispersion or gaussian sigma
-
-        Parameters
-        ----------
-        xarr : pyspeckit.spectrum.units.SpectroscopicAxis
-        params : np.ndarray
-            1D array of parameters. Values are strided as [A1, A2, B1, B2, ...]
-            for parameters A and B for components 1 and 2.
-        noise : number, default 0.03
-            Standard deviation of the baseline noise
-        vsys : number, default 0
-        set_seed : bool, default=False
-            If `True` will use a default seed of 5 for the np.random module.
-        """
-        if set_seed:
-            np.random.seed(5)
-        else:
-            np.random.seed()
-        # ensure frequency ordering is ascending
-        if xarr[1] - xarr[0] > 0:
-            self.xarr = xarr.copy()
-        else:
-            self.xarr = xarr[::-1].copy()
-        self.xarr.convert_to_unit('Hz')
-        self.varr = self.xarr.as_unit('km/s')
-        self.params = params
-        self.noise = noise
-        self.vsys = vsys
-        self.size  = xarr.shape[0]
-        self.ncomp = params.shape[0] // 5
-        self.components = self.calc_profiles()
-        self.sum_spec = self.components.sum(axis=0)
-        self.noise_spec = self.calc_noise()
-        self.sampled_spec = self.sum_spec + self.noise_spec
-
-    def calc_profiles(self):
-        n = self.ncomp
-        models = np.array([
-                pyspeckit.spectrum.models.ammonia.ammonia(
-                    self.xarr,
-                    xoff_v=self.params[    i]+self.vsys,
-                    trot  =self.params[  n+i],
-                    tex   =self.params[2*n+i],
-                    ntot  =self.params[3*n+i],
-                    width =self.params[4*n+i],
-                    fortho=0.0,
-                )
-                for i in range(self.ncomp)
-        ])
-        return models
-
-    def calc_noise(self):
-        return np.random.normal(scale=self.noise, size=self.size)
-
-    def resample_spectrum(self, noise=None):
-        if noise is not None:
-            self.noise = noise
-        self.noise_spec = self.calc_noise()
-        self.sampled_spec = self.sum_spec + self.noise_spec
-
-    def to_ammspec(self):
-        xarr = self.xarr.value.copy()
-        data = self.sampled_spec
-        return AmmoniaSpectrum(xarr, data, self.noise)
-
-
-def get_test_spectra():
-    freqs = pyspeckit.spectrum.models.ammonia_constants.freq_dict.copy()
-    Axis = pyspeckit.spectrum.units.SpectroscopicAxis
-    vchan = 0.158  # km/s
-    vaxis = np.arange(-30, 30, vchan) * u.km / u.s
-    xa11 = Axis(vaxis, velocity_convention='radio', refX=freqs['oneone']).as_unit('Hz')
-    xa22 = Axis(vaxis, velocity_convention='radio', refX=freqs['twotwo']).as_unit('Hz')
-    params = np.array([
-        -1.0,  1.5,  # voff
-        10.0, 15.0,  # trot
-         4.0,  6.0,  # tex
-        14.5, 15.0,  # ntot
-         0.3,  0.6,  # sigm
-    ])
-    #params = np.array([
-    #    -1.0,  1.0,  # voff
-    #    12.0, 12.0,  # trot
-    #     6.0,  6.0,  # tex
-    #    14.5, 14.6,  # ntot
-    #     0.3,  0.3,  # sigm
-    #])
-    spectra = [
-            SyntheticSpectrum(xarr, params, noise=0.2, set_seed=True)
-            for xarr in (xa11, xa22)
-    ]
-    return spectra
 
 
 def get_irdc_priors(size=500, vsys=0.0):
@@ -155,23 +52,27 @@ def get_irdc_priors(size=500, vsys=0.0):
     epsilon = 1e-13
     x = np.linspace(0, 1-epsilon, size)
     dist_voff = sp.stats.beta(5.0, 5.0)
+    dist_vdep = sp.stats.beta(1.5, 3.5)
     dist_trot = sp.stats.gamma(4.4, scale=0.070)
     dist_tex  = sp.stats.beta(1.0, 2.5)
     dist_ntot = sp.stats.beta(16.0, 14.0)
     dist_sigm = sp.stats.gamma(1.5, loc=0.03, scale=0.2)
     # interpolation values, transformed to the intervals:
     # voff [-4.00,  4.0] km/s  (centered on vsys)
+    # vdep [    D,D+3.0] km/s  (with offset "D")
     # trot [ 7.00, 30.0] K
     # tex  [ 2.74, 12.0] K
     # ntot [12.00, 17.0] log(cm^-2)
     # sigm [ 0.00,  2.0] km/s
     y_voff =  8.00 * dist_voff.ppf(x) -  4.00 + vsys
+    y_vdep =  3.00 * dist_vdep.ppf(x) +  0.70
     y_trot = 23.00 * dist_trot.ppf(x) +  7.00
     y_tex  =  9.26 * dist_tex.ppf(x)  +  2.74
     y_ntot =  5.00 * dist_ntot.ppf(x) + 12.00
     y_sigm =  2.00 * dist_sigm.ppf(x)
     priors = [
-            OrderedPrior(y_voff),
+            #OrderedPrior(y_voff),
+            SpacedPrior(Prior(y_voff), Prior(y_vdep)),
             Prior(y_trot),
             Prior(y_tex),
             Prior(y_ntot),
@@ -230,7 +131,6 @@ class DataCube:
         return hdict
 
     def data_from_cube(self, cube):
-        # check ordering of 
         cube = cube.to('K').with_spectral_unit('Hz')
         axis = cube.spectral_axis.value.copy()
         nu_chan = axis[1] - axis[0]
@@ -243,8 +143,12 @@ class DataCube:
         data = cube._data.transpose().copy()
         return data, axis
 
+    def get_array(self, i_lon, i_lat):
+        arr = self.data[i_lon,i_lat,:]  # axes reversed from typical cube
+        return arr
+
     def get_spectra(self, i_lon, i_lat):
-        spec = self.data[i_lon,i_lat,:]  # axes reversed from typical cube
+        spec = self.get_array(i_lon, i_lat)
         has_nans = np.isnan(spec).any()
         if isinstance(self.noise, (float, int)):
             noise = self.noise
@@ -276,13 +180,20 @@ class CubeStack:
     def spatial_shape(self):
         return self.cubes[0].spatial_shape
 
+    def get_arrays(self, i_lon, i_lat):
+        arrays = []
+        for dcube in self.cubes:
+            arr = dcube.get_array(i_lon, i_lat)
+            arrays.append(arr)
+        return arrays
+
     def get_spectra(self, i_lon, i_lat):
         spectra = []
         any_nans = False
         for dcube in self.cubes:
             spec, has_nans = dcube.get_spectra(i_lon, i_lat)
             spectra.append(spec)
-            any_nans &= has_nans
+            any_nans |= has_nans
         return spectra, any_nans
 
 
@@ -379,6 +290,15 @@ class HdfStore:
                     category=RuntimeWarning,
             )
 
+    def read_header(self, full=True):
+        assert self.is_open
+        hdr_group_name = 'full_header' if full else 'simple_header'
+        h_group = self.hdf[hdr_group_name]
+        header = fits.Header()
+        for k, v in h_group.attrs.items():
+            header[k] = v
+        return header
+
     def create_dataset(self, dset_name, data, group='', clobber=True):
         assert len(dset_name) > 0
         path = f'{group.rstrip("/")}/{dset_name}'
@@ -456,8 +376,8 @@ class CubeFitter:
             self.fit(indices[0], store.chunk_names[0])
         else:
             # NOTE A simple `multiprocessing.Pool` cannot be used because the
-            # Cython C-extensions cannot be pickled without effort to implement
-            # the pickling protocol on all classes.
+            # Cython C-extensions cannot be pickled without implementing the
+            # pickling protocol on all classes.
             # NOTE `mpi4py` may be more appropriate here, but it is more complex
             # FIXME no error handling if a process fails/raises an exception
             sequence = list(zip(indices, store.chunk_names))
@@ -484,10 +404,13 @@ def get_multiproc_indices(shape, nproc):
     return indices
 
 
-def get_test_cubestack():
+def get_test_cubestack(full=False):
     # NOTE hack in indexing because last channel is all NaN's
-    cube11 = spectral_cube.SpectralCube.read('data/test_cube_11.fits')[:-1,155:195,155:195]
-    cube22 = spectral_cube.SpectralCube.read('data/test_cube_22.fits')[:-1,155:195,155:195]
+    cube11 = spectral_cube.SpectralCube.read('data/test_cube_11.fits')[:-1]
+    cube22 = spectral_cube.SpectralCube.read('data/test_cube_22.fits')[:-1]
+    if not full:
+        cube11 = cube11[:,155:195,155:195]
+        cube22 = cube22[:,155:195,155:195]
     cubes = (DataCube(cube11, noise=0.35), DataCube(cube22, noise=0.35))
     stack = CubeStack(cubes)
     return stack
@@ -497,7 +420,7 @@ def test_fit_cube(store_name='run/test_cube_multin'):
     store_filen = f'{store_name}.store'
     if Path(store_filen).exists():
         shutil.rmtree(store_filen)
-    stack = get_test_cubestack()
+    stack = get_test_cubestack(full=False)
     utrans = get_irdc_priors(vsys=63.7)  # correct for G23481 data
     fitter = CubeFitter(stack, utrans, ncomp_max=3)
     fitter.fit_cube(store_name=store_name, nproc=8)
@@ -523,7 +446,7 @@ def aggregate_store_products(store, prod_name='independent'):
     # get list of parameters out of cube
     # get list of marginal percentiles
     ncomp_max = hdf.attrs['n_max_components']
-    test_group = 'pix/0/0/1'  # FIXME
+    test_group = f'pix/{n_lon//2}/{n_lat//2}/1'  # FIXME may not exist
     n_params  = hdf[test_group].attrs['n_params']
     par_names = hdf[test_group].attrs['par_names']
     marg_cols = hdf[test_group].attrs['marg_cols']
@@ -547,6 +470,8 @@ def aggregate_store_products(store, prod_name='independent'):
         i_lat = group.attrs['i_lat']
         print(f'-- ({i_lon}, {i_lat}) aggregating values')
         nbest = group.attrs['nbest']
+        if nbest == 0:
+            continue
         nb_group = group[f'{nbest}']
         nbest_img[i_lon,i_lat] = nbest
         # convert MAP params from 1D array to 2D for:
@@ -568,7 +493,49 @@ def aggregate_store_products(store, prod_name='independent'):
     store.create_dataset('nbest_marginals_cube', pardata.transpose(), group=dpath)
 
 
-def store_products_to_fits(store, prod_group='indep'):
+def aggregate_store_hists(store, prod_name='independent'):
+    # FIXME should be refactored into aggregate function above
+    hdf = store.hdf
+    n_lat = hdf.attrs['naxis1']
+    n_lon = hdf.attrs['naxis2']
+    test_group = f'pix/{n_lon//2}/{n_lat//2}/1'  # FIXME may not exist
+    n_params  = hdf[test_group].attrs['n_params']
+    par_names = hdf[test_group].attrs['par_names']
+    n_bins = 150
+    # dimensions (l, b, h, p) for histogram values
+    #   (latitude, longitude, parameter, histogram-value)
+    histdata = np.empty((n_lon, n_lat, n_bins-1, n_params))
+    histdata[...] = np.nan
+    # set linear bins from limits of the posteriors
+    # FIXME should have the limits in the store-file and get them from there
+    all_bins = [np.linspace(lo, hi, n_bins)
+            for lo, hi in (
+                (63.7-4, 63.7+4), (7, 30), (2.74, 12.0), (12, 17), (0, 2),
+            )
+    ]
+    for group in store.iter_pix_groups():
+        i_lon = group.attrs['i_lon']
+        i_lat = group.attrs['i_lat']
+        print(f'-- ({i_lon}, {i_lat}) aggregating values')
+        nbest = group.attrs['nbest']
+        if nbest == 0:
+            continue
+        nb_group = group[f'{nbest}']
+        post = nb_group['posteriors']
+        for i_par, bins in enumerate(all_bins):
+            hist, _ = np.histogram(
+                    post[:,i_par*nbest:(i_par+1)*nbest], bins=bins,
+                    density=True,
+            )
+            histdata[i_lon,i_lat,:,i_par] = hist * nbest
+    dpath = f'/aggregate/{prod_name}'
+    store.hdf.require_group(dpath)
+    # transpose to dimensions (p, h, b, l)
+    store.create_dataset('post_hists', histdata.transpose(), group=dpath)
+    store.create_dataset('hist_bins', np.array(all_bins), group=dpath)
+
+
+def store_products_to_fits(store, prod_group='independent'):
     # TODO create header, reshape, and store as FITS
     #fits_header = fits.Header()
     #header_group = hdf['simple_header']
