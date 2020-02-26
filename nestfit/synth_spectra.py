@@ -120,7 +120,7 @@ def get_test_spectra():
     freqs = pyspeckit.spectrum.models.ammonia_constants.freq_dict.copy()
     Axis = pyspeckit.spectrum.units.SpectroscopicAxis
     vchan = 0.158  # km/s
-    vaxis = np.arange(30, -30, vchan) * u.km / u.s
+    vaxis = np.arange(-30, 30, vchan) * u.km / u.s
     xa11 = Axis(vaxis, velocity_convention='radio', refX=freqs['oneone']).as_unit('Hz')
     xa22 = Axis(vaxis, velocity_convention='radio', refX=freqs['twotwo']).as_unit('Hz')
     params = np.array([
@@ -144,10 +144,10 @@ def get_test_spectra():
     return spectra
 
 
-def make_fake_header(shape, shape):
+def make_fake_header(data, xarr):
     kwds = FAKE_KWDS.copy()
-    kwds['CRPIX1'] = shape[0]
-    kwds['CRPIX2'] = shape[1]
+    kwds['CRPIX1'] = data.shape[0]
+    kwds['CRPIX2'] = data.shape[1]
     kwds['CRPIX3'] = xarr.shape[0]
     kwds['CRVAL3'] = xarr.refX
     kwds['CDELT3'] = xarr[1] - xarr[0]

@@ -563,6 +563,9 @@ cdef class Dumper:
         # The last two columns of the posterior array are -2*lnL and X*L/Z
         return np.quantile(posteriors[:,:-2], self.quantiles, axis=0)
 
+    def flush(self):
+        self.group.file.flush()
+
     def append_attributes(self, **kwargs):
         for name, value in kwargs.items():
             self.group.attrs[name] = value

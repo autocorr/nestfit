@@ -219,15 +219,14 @@ class HdfStore:
         """
         self.store_name = store_name
         self.store_dir = Path(check_ext(self.store_name, ext='store'))
+        self.store_dir.mkdir(parents=True, exist_ok=True)
         # FIXME Perform error handling for if HDF file is already open
         self.hdf = h5py.File(self.store_dir / self.linked_table, 'a')
-        if self.store_dir.exists():
+        try:
             self.nchunks = self.hdf.attrs['nchunks']
-        else:
-            self.store_dir.mkdir()
+        except KeyError:
             self.hdf.attrs['nchunks'] = nchunks
             self.nchunks = nchunks
-        self.chunks = [h5py.File(path, 'a') for path in self.chunk_paths]
 
     @property
     def chunk_paths(self):
@@ -246,24 +245,9 @@ class HdfStore:
         except ValueError:
             return False
 
-    @property
-    def chunks_open(self):
-        for chunk_hdf in self.chunks:
-            try:
-                chunk_hdf.mode
-            except ValueError:
-                print(f'-- {chunk_hdf.filename} closed')
-                return False
-        return True
-
     def close(self):
-        if self.is_open:
-            self.hdf.flush()
-            self.hdf.close()
-        if self.chunks_open:
-            for chunk_hdf in self.chunks:
-                chunk_hdf.flush()
-                chunk_hdf.close()
+        self.hdf.flush()
+        self.hdf.close()
 
     def iter_pix_groups(self):
         assert self.is_open
@@ -280,15 +264,14 @@ class HdfStore:
 
     def link_files(self):
         assert self.is_open
-        assert self.chunks_open
-        for chunk_hdf in self.chunks:
-            for lon_pix in chunk_hdf['/pix']:
-                for lat_pix in chunk_hdf[f'/pix/{lon_pix}']:
-                    group_name = f'/pix/{lon_pix}/{lat_pix}'
-                    group = h5py.ExternalLink(chunk_path.name, group_name)
-                    self.hdf[group_name] = group
-            chunk_hdf.flush()
-            self.hdf.flush()
+        for chunk_path in self.chunk_paths:
+            with h5py.File(chunk_path, 'r') as chunk_hdf:
+                for lon_pix in chunk_hdf['/pix']:
+                    for lat_pix in chunk_hdf[f'/pix/{lon_pix}']:
+                        group_name = f'/pix/{lon_pix}/{lat_pix}'
+                        group = h5py.ExternalLink(chunk_path, group_name)
+                        self.hdf[group_name] = group
+                self.hdf.flush()
 
     def reset_pix_links(self):
         assert self.is_open
@@ -352,7 +335,12 @@ class CubeFitter:
         self.mn_kwargs = mn_kwargs if mn_kwargs is not None else self.mn_default_kwargs
 
     def fit(self, *args):
-        (all_lon, all_lat), hdf = args
+        (all_lon, all_lat), chunk_path = args
+        # NOTE for HDF5 files to be written correctly, they must be opened
+        # *after* the `multiprocessing.Process` has been forked from the main
+        # Python process, and it inherits the HDF5 libraries state.
+        # See "Python and HDF5" pg. 116
+        hdf = h5py.File(chunk_path, 'a')
         for (i_lon, i_lat) in zip(all_lon, all_lat):
             spectra, has_nans = self.stack.get_spectra(i_lon, i_lat)
             if has_nans:
@@ -384,6 +372,7 @@ class CubeFitter:
             group.attrs['i_lon'] = i_lon
             group.attrs['i_lat'] = i_lat
             group.attrs['nbest'] = nbest
+        hdf.close()
 
     def fit_cube(self, store_name='run/test_cube', nproc=1):
         n_chan, n_lat, n_lon = self.stack.shape
@@ -393,14 +382,14 @@ class CubeFitter:
         # create list of indices for each process
         indices = get_multiproc_indices(self.stack.spatial_shape, store.nchunks)
         if store.nchunks == 1:
-            self.fit(indices[0], store.chunks[0])
+            self.fit(indices[0], store.chunk_paths[0])
         else:
             # NOTE A simple `multiprocessing.Pool` cannot be used because the
             # Cython C-extensions cannot be pickled without implementing the
             # pickling protocol on all classes.
             # NOTE `mpi4py` may be more appropriate here, but it is more complex
             # FIXME no error handling if a process fails/raises an exception
-            sequence = list(zip(indices, store.chunks))
+            sequence = list(zip(indices, store.chunk_paths))
             procs = [
                     multiprocessing.Process(target=self.fit, args=args)
                     for args in sequence
@@ -442,7 +431,7 @@ def test_fit_cube(store_name='run/test_cube_multin'):
         shutil.rmtree(store_filen)
     stack = get_test_cubestack(full=False)
     utrans = get_irdc_priors(vsys=63.7)  # correct for G23481 data
-    fitter = CubeFitter(stack, utrans, ncomp_max=3)
+    fitter = CubeFitter(stack, utrans, ncomp_max=1)
     fitter.fit_cube(store_name=store_name, nproc=8)
 
 
