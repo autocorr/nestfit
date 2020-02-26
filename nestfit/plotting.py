@@ -12,12 +12,13 @@ from matplotlib import pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from mayavi import mlab as mvi
 
-import corner
+import getdist
+from getdist import plots as gd_plt
 import pyspeckit
 from astropy.wcs import WCS
 
-from nestfit import (get_par_labels, TEX_LABELS, PLOT_DIR)
-from nestfit.core import (SyntheticSpectrum, get_test_spectra)
+from nestfit import (get_par_names, TEX_LABELS, TEX_LABELS_NU, PLOT_DIR)
+from nestfit.synth_spectra import (SyntheticSpectrum, get_test_spectra)
 from nestfit.wrapped import (amm11_predict, amm22_predict)
 
 
@@ -153,17 +154,46 @@ def plot_spec_compare(synspec, analyzer, outname='test'):
     save_figure(outname)
 
 
-def plot_corner(synspec, analyzer, show_truths=False, outname='test_corner'):
-    par_labels = get_par_labels(analyzer.n_params // 5)
-    truths = synspec.params if show_truths else None
-    plt.rc('font', size=12, family='serif')
-    posteriors = analyzer.get_equal_weighted_posterior()[:,:-1]
-    fig = corner.corner(posteriors, truths=truths,
-            labels=par_labels, label_kwargs={'fontsize': 14},
-            show_titles=True, title_kwargs={'fontsize': 14})
-    # save figure
-    save_figure(outname)
-    plt.rc('font', size=10, family='serif')
+def plot_corner(group, outname='corner'):
+    ncomp = group.attrs['ncomp']
+    par_labels = TEX_LABELS
+    n_params = group.attrs['n_params'] // ncomp
+    names = get_par_names()
+    post = group['posteriors'][...][:,:-2]  # don't need logL & P
+    # Give each model component parameter set its own sampler object so that
+    # each can be over-plotted in its own color.
+    samples = [
+            getdist.MCSamples(
+                samples=post[:,ii::ncomp],
+                names=names,
+                labels=par_labels,
+                label=f'Component {ii+1}')
+            for ii in range(ncomp)
+    ]
+    fig = gd_plt.get_subplot_plotter()
+    fig.triangle_plot(samples, filled=True,
+            line_args=[
+                {'lw':2, 'color':'tab:orange'},
+                {'lw':2, 'color':'tab:blue'},
+                {'lw':2, 'color':'tab:green'}],
+    )
+    fig.export(f'{outname}.pdf')
+    plt.close()
+
+
+def plot_multicomp_velo_2corr(group, outname='velo_2corr'):
+    ncomp = group.attrs['ncomp']
+    assert ncomp == 2
+    n_params = group.attrs['n_params'] // ncomp
+    post = group['posteriors'][...][:,:-2]  # don't need logL & P
+    names = get_par_names(ncomp)
+    samples = getdist.MCSamples(samples=post, names=names)
+    fig = gd_plt.get_subplot_plotter()
+    x_names = ['v1', 's1']
+    y_names = ['v2', 's2']
+    fig.rectangle_plot(x_names, y_names, roots=samples, filled=True)
+    fig.export(f'{outname}.pdf')
+    plt.close()
 
 
 def add_discrete_colorbar(ax, orientation='vertical'):
