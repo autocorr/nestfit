@@ -85,9 +85,9 @@ def test_nested(ncomp=2, prefix='test'):
     synspec = get_test_spectra()
     spectra = [syn.to_ammspec() for syn in synspec]
     utrans = get_irdc_priors(vsys=0)
-    with h5py.File('test.hdf', 'a') as hdf:
-        group = hdf.create_group(f'{prefix}/{ncomp}')
-        dumper = Dumper(group)
+    with h5py.File('test.hdf', 'a', driver='core') as hdf:
+        group = hdf.require_group(f'{prefix}/{ncomp}')
+        dumper = Dumper(group, no_dump=True)
         runner = AmmoniaRunner(spectra, utrans, ncomp)
         run_multinest(runner, dumper, nlive=60, seed=5, tol=1.0, efr=0.3,
                 updInt=2000)

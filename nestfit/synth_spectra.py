@@ -151,7 +151,7 @@ def make_fake_header(data, xarr):
     kwds['CRPIX3'] = xarr.shape[0]
     kwds['CRVAL3'] = xarr.refX
     kwds['CDELT3'] = xarr[1] - xarr[0]
-    kwds['RESTFRQ'] = xarr.refX
+    kwds['RESTFRQ'] = xarr.refX.to('Hz').value
     return fits.Header(kwds)
 
 
@@ -178,7 +178,7 @@ class ParamSampler:
     def draw(self):
         vsep = np.random.uniform(*self.vsep)
         voff = np.array([0, vsep])
-        return np.concatentate([
+        return np.concatenate([
                 voff,
                 np.random.uniform(*self.trot, size=2),
                 np.random.uniform(*self.tex,  size=2),
@@ -206,11 +206,11 @@ def make_indep_synth_cube():
         syn22 = SyntheticSpectrum(xarr22, params, noise=0, set_seed=False)
         data11[ii] = syn11.sum_spec
         data22[ii] = syn22.sum_spec
-        pkcube[ii] = (syn11.sum_spec.max(), syn.sum_spec.max())
+        pkcube[ii] = (syn11.sum_spec.max(), syn22.sum_spec.max())
     pcube = pcube.reshape(im_shape[0], im_shape[1], -1)
-    fits.PrimaryHDU(pcube).writeto('syn_params.fits')
-    pkcube = pkcube.reshape(im_shape, im_shape[1], -1)
-    fits.PrimaryHDU(pkcube).writeto('syn_peak.fits')
+    fits.PrimaryHDU(pcube).writeto('syn_params.fits', overwrite=True)
+    pkcube = pkcube.reshape(im_shape[0], im_shape[1], -1)
+    fits.PrimaryHDU(pkcube).writeto('syn_peak.fits', overwrite=True)
     data11 = data11.reshape(im_shape[0], im_shape[1], -1)
     data22 = data22.reshape(im_shape[0], im_shape[1], -1)
     header11 = make_fake_header(data11, xarr11)
@@ -225,7 +225,7 @@ def make_indep_synth_cube():
         hdu11 = fits.PrimaryHDU(data=ndata11, header=header11)
         hdu22 = fits.PrimaryHDU(data=ndata22, header=header22)
         # write fits cube
-        hdu11.writeto(f'syn_11_rms{noise:.3f}.fits')
-        hdu22.writeto(f'syn_22_rms{noise:.3f}.fits')
+        hdu11.writeto(f'syn_11_rms{noise:.3f}.fits', overwrite=True)
+        hdu22.writeto(f'syn_22_rms{noise:.3f}.fits', overwrite=True)
 
 

@@ -420,7 +420,7 @@ cdef class SpacedPrior(Prior):
 cdef class PriorTransformer:
     cdef:
         int npriors
-        Prior p_trot, p_tex, p_ntot, p_sigm, p_voff
+        list priors
 
     def __init__(self, priors):
         """
@@ -434,13 +434,11 @@ cdef class PriorTransformer:
             List-like of individual `Prior` instances.
         """
         self.npriors = len(priors)
-        self.p_voff = priors[0]
-        self.p_trot = priors[1]
-        self.p_tex  = priors[2]
-        self.p_ntot = priors[3]
-        self.p_sigm = priors[4]
+        self.priors = priors
+        for prior in priors:
+            assert isinstance(prior, Prior)
 
-    cdef void transform(self, double *utheta, int ncomp) nogil:
+    cdef void transform(self, double *utheta, int ncomp):
         """
         Parameters
         ----------
@@ -451,11 +449,9 @@ cdef class PriorTransformer:
         """
         # NOTE may do unsafe writes if `utheta` does not have the same
         # size as the number of components `ncomp`.
-        self.p_voff.interp(utheta, ncomp, 0)
-        self.p_trot.interp(utheta, ncomp, 1)
-        self.p_tex.interp( utheta, ncomp, 2)
-        self.p_ntot.interp(utheta, ncomp, 3)
-        self.p_sigm.interp(utheta, ncomp, 4)
+        cdef int i
+        for i in range(self.npriors):
+            (<Prior> self.priors[i]).interp(utheta, ncomp, i)
 
 
 cdef class Runner:
