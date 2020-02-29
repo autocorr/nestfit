@@ -27,7 +27,7 @@ from astropy import units as u
 from .synth_spectra import get_test_spectra
 from .wrapped import (
         amm11_predict, amm22_predict,
-        Prior, OrderedPrior, SpacedPrior, PriorTransformer,
+        Prior, OrderedPrior, SpacedPrior, ResolvedWidthPrior, PriorTransformer,
         AmmoniaSpectrum, AmmoniaRunner, Dumper, run_multinest,
 )
 
@@ -58,12 +58,12 @@ def get_irdc_priors(size=500, vsys=0.0):
     dist_ntot = sp.stats.beta(16.0, 14.0)
     dist_sigm = sp.stats.gamma(1.5, loc=0.03, scale=0.2)
     # interpolation values, transformed to the intervals:
-    # voff [-4.00,  4.0] km/s  (centered on vsys)
-    # vdep [    D,D+3.0] km/s  (with offset "D")
-    # trot [ 7.00, 30.0] K
-    # tex  [ 2.74, 12.0] K
-    # ntot [12.00, 17.0] log(cm^-2)
-    # sigm [ 0.00,  2.0] km/s
+    # 0 voff [-4.00,  4.0] km/s  (centered on vsys)
+    #   vdep [    D,D+3.0] km/s  (with offset "D")
+    # 1 trot [ 7.00, 30.0] K
+    # 2 tex  [ 2.74, 12.0] K
+    # 3 ntot [12.00, 17.0] log(cm^-2)
+    # 4 sigm [ 0.00,  2.0] km/s
     y_voff =  8.00 * dist_voff.ppf(x) -  4.00 + vsys
     y_vdep =  3.00 * dist_vdep.ppf(x) +  0.70
     y_trot = 23.00 * dist_trot.ppf(x) +  7.00
@@ -71,12 +71,16 @@ def get_irdc_priors(size=500, vsys=0.0):
     y_ntot =  5.00 * dist_ntot.ppf(x) + 12.00
     y_sigm =  2.00 * dist_sigm.ppf(x)
     priors = [
-            #OrderedPrior(y_voff),
-            SpacedPrior(Prior(y_voff), Prior(y_vdep)),
-            Prior(y_trot),
-            Prior(y_tex),
-            Prior(y_ntot),
-            Prior(y_sigm),
+            #OrderedPrior(y_voff, 0),
+            #SpacedPrior(Prior(y_voff, 0), Prior(y_vdep, 0)),
+            #Prior(y_trot, 1),
+            #Prior(y_tex,  2),
+            #Prior(y_ntot, 3),
+            #Prior(y_sigm, 4),
+            ResolvedWidthPrior(Prior(y_voff, 0), Prior(y_sigm, 4), scale=1.5),
+            Prior(y_trot, 1),
+            Prior(y_tex,  2),
+            Prior(y_ntot, 3),
     ]
     return PriorTransformer(priors)
 

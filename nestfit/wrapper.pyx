@@ -31,6 +31,7 @@ fillErfTable()
 
 # NOTE These "DEF" constants will be in-lined with their value wherever they
 # appear in the code at compilation time.
+DEF FWHM = 2.3548200450309493
 
 # Ammonia rotation constants [Splat ID: 01709]
 # Poynter & Kakar (1975), ApJS, 29, 87; [from pyspeckit]
@@ -334,11 +335,11 @@ def amm22_predict(AmmoniaSpectrum s, double[::1] params):
 
 cdef class Prior:
     cdef:
-        int size
+        int size, p_ix
         double dx, dmin, dmax
         double[::1] data
 
-    def __init__(self, data):
+    def __init__(self, data, p_ix):
         """
         Interpolate the inverse cumulative prior function using an equally
         spaced sampling along the x-axis. Values are linearly interpolated
@@ -349,8 +350,14 @@ cdef class Prior:
         data : array-like
             Inverse cumulative prior function (see "percent pointile function"
             `.ppf` scipy statistical distributions)
+        p_ix : int
+            Index of the parameter in the model described by the prior.
+            For the ammonia model these are:
+                vcen: 0, trot: 1, tex: 2, ncol: 3, sigm: 4
         """
         self.data = data
+        assert p_ix >= 0
+        self.p_ix = p_ix
         self.size = data.shape[0]
         self.dx = 1 / <double>(self.size)
         self.dmin = np.min(data)
@@ -368,53 +375,114 @@ cdef class Prior:
         slope = (y_hi - y_lo) / self.dx
         return slope * (u - x_lo) + y_lo
 
-    cdef void interp(self, double *utheta, int n, int npar) nogil:
-        cdef int i
-        for i in range(npar*n, (npar+1)*n):
-            utheta[i] = self._interp(utheta[i])
+    cdef void interp(self, double *utheta, int n) nogil:
+        cdef:
+            int i
+            int ix = self.p_ix * n
+        for i in range(0, n):
+            utheta[ix+i] = self._interp(utheta[ix+i])
 
 
 cdef class OrderedPrior(Prior):
-    cdef void interp(self, double *utheta, int n, int npar) nogil:
+    cdef void interp(self, double *utheta, int n) nogil:
         cdef:
             int i
-            double u, umin, umax
+            int ix = self.p_ix * n
+            double u, umin
         # Values are sampled from the prior distribution, but a strict
         # ordering of the components is enforced from left-to-right by
         # making the offsets conditional on the last value:
-        #     umin      umax
+        #     umin      umax(=1)
         #     |--x---------|
         #        |----x----|
         #             |--x-|
-        umin, umax = 0.0, 1.0
-        for i in range(npar*n, (npar+1)*n):
-            u = umin + (umax - umin) * utheta[i]
+        umin = 0.0
+        for i in range(0, n):
+            u = umin + (1 - umin) * utheta[ix+i]
             umin = u
-            utheta[i] = self._interp(u)
+            utheta[ix+i] = self._interp(u)
 
 
-# NOTE This class has not been tested.
 cdef class SpacedPrior(Prior):
     cdef:
         Prior prior_indep, prior_depen
 
     def __init__(self, prior_indep, prior_depen):
+        """
+        Parameters
+        ----------
+        prior_indep : Prior
+            Independent prior. The first sample is drawn from this
+            distribution.
+        prior_depen : Prior
+            Dependent prior. Further samples are drawn from this distribution.
+        """
         self.prior_indep = prior_indep
         self.prior_depen = prior_depen
 
-    cdef void interp(self, double *utheta, int n, int npar) nogil:
+    cdef void interp(self, double *utheta, int n) nogil:
         cdef:
             int i
+            int ix = self.p_ix * n
             double u
-        u = self.prior_indep._interp(utheta[0])
-        utheta[0] = u
+        u = self.prior_indep._interp(utheta[ix])
+        utheta[ix] = u
         # Draw initial value from independent prior distribution, then
         # draw offsets from the running value from the dependent prior
         # distribution, updated in `u` for (n-1) samples.
-        # Note that python will not execute a loop of zero interval
-        for i in range(npar*n+1, (npar+1)*n):
-            u = u + self.prior_depen._interp(utheta[i])
-            utheta[i] = u
+        # Note that python will not execute a loop of zero interval.
+        for i in range(1, n):
+            u = u + self.prior_depen._interp(utheta[ix+i])
+            utheta[ix+i] = u
+
+
+cdef class ResolvedWidthPrior(Prior):
+    cdef:
+        double sep_scale
+        Prior prior_cen, prior_sig
+
+    def __init__(self, prior_cen, prior_sig, scale=1):
+        """
+        Parameters
+        ----------
+        prior_cen : Prior
+            Velocity centroid prior
+        prior_sig : Prior
+            Velocity dispersion prior
+        sep_scale : number, default 1
+            Multiplicative scaling factor of the Gaussian FWHM to provide the
+            minimum separation between components.
+        """
+        self.prior_cen = prior_cen
+        self.prior_sig = prior_sig
+        self.sep_scale = FWHM * scale
+
+    cdef void interp(self, double *utheta, int n) nogil:
+        cdef:
+            int i, ix_v, ix_w
+            double sep_scale = self.sep_scale
+            double v_umin, v_prev, v_next, w_prev, w_next, offset
+        ix_v = self.prior_cen.p_ix * n
+        ix_w = self.prior_sig.p_ix * n
+        # Draw first velocity centroid.
+        v_umin = utheta[ix_v]
+        v_prev = self.prior_cen._interp(v_umin)
+        utheta[ix_v*n] = v_prev
+        # Draw first velocity dispersion.
+        w_prev = self.prior_sig._interp(utheta[ix_w])
+        utheta[ix_w] = w_prev
+        # Iteratively draw the next width, determine the appropriate offset
+        # from the previous centroid to start from, and then draw next centroid
+        # over the remaining interval.
+        for i in range(1, n):
+            w_next = self.prior_sig._interp(utheta[ix_w+i])
+            utheta[ix_w+i] = w_next
+            offset = sep_scale * c_sqrt(w_next * w_prev)
+            v_umin = v_umin + (1 - v_umin) * utheta[ix_v+i]
+            v_next = offset + self.prior_cen._interp(v_umin)
+            utheta[ix_v+i] = v_next
+            v_prev = v_next
+            w_prev = w_next
 
 
 cdef class PriorTransformer:
@@ -432,8 +500,11 @@ cdef class PriorTransformer:
         ----------
         priors : iterable(Prior)
             List-like of individual `Prior` instances.
+        ipars : iterable(int)
+            List of indices for the priors in the parameter unit-cube array.
         """
         self.npriors = len(priors)
+        assert self.npriors > 0
         self.priors = priors
         for prior in priors:
             assert isinstance(prior, Prior)
@@ -445,13 +516,14 @@ cdef class PriorTransformer:
         utheta : double*
             Pointer to parameter unit cube.
         ncomp : int
-            Number of components. `utheta` should have dimension [5*n].
+            Number of components. `utheta` should have dimension [5*n] for
+            ammonia.
         """
         # NOTE may do unsafe writes if `utheta` does not have the same
         # size as the number of components `ncomp`.
         cdef int i
         for i in range(self.npriors):
-            (<Prior> self.priors[i]).interp(utheta, ncomp, i)
+            (<Prior> self.priors[i]).interp(utheta, ncomp)
 
 
 cdef class Runner:
