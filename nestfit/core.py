@@ -93,19 +93,62 @@ def test_nested(ncomp=2, prefix='test'):
         group = hdf.require_group(f'{prefix}/{ncomp}')
         dumper = Dumper(group, no_dump=True)
         runner = AmmoniaRunner(spectra, utrans, ncomp)
-        run_multinest(runner, dumper, nlive=60, seed=5, tol=1.0, efr=0.3,
-                updInt=2000)
+        for _ in range(10):
+            run_multinest(runner, dumper, nlive=60, seed=5, tol=1.0, efr=0.3,
+                    updInt=2000)
     return synspec, spectra, runner
 
 
+class NoiseMap:
+    def __init__(self, img):
+        # Data cube axes are transposed, so these need to be as well
+        self.img = img.transpose()
+        self.shape = img.shape
+
+    @classmethod
+    def from_pbimg(cls, rms, pb_img):
+        shape = pb_img.shape
+        naxes = len(shape)
+        if naxes == 4:
+            pb_img = pb_img[0,0]
+        elif naxes == 3:
+            pb_img = pb_img[0]
+        elif naxes == 2:
+            pass
+        else:
+            raise ValueError(f'Cannot parse shape : {shape}')
+        # A typical primary beam image will be masked with NaNs, so replace
+        # them in the noise map with Inf values.
+        img = rms / pb_img
+        img[~np.isfinite(img)] = np.inf
+        return cls(img)
+
+    def get_noise(self, i_lon, i_lat):
+        return self.img[i_lon, i_lat]
+
+
+class NoiseMapUniform:
+    def __init__(self, rms):
+        self.rms = rms
+        self.shape = None
+
+    def get_noise(self, i_lon, i_lat):
+        return self.rms
+
+
 class DataCube:
-    def __init__(self, cube, noise=None):
-        self.noise = noise
+    def __init__(self, cube, noise_map):
+        if isinstance(noise_map, (float, int)):
+            self.noise_map = NoiseMapUniform(noise_map)
+        else:
+            self.noise_map = noise_map
         self._header = cube.header.copy()
         self.data, self.xarr = self.data_from_cube(cube)
         self.shape = self.data.shape
         # NOTE data is transposed so (s, b, l) -> (l, b, s)
         self.spatial_shape = (self.shape[0], self.shape[1])
+        if self.noise_map.shape is not None:
+            assert self.spatial_shape == self.noise_map.shape
 
     @property
     def full_header(self):
@@ -156,10 +199,7 @@ class DataCube:
     def get_spectra(self, i_lon, i_lat):
         spec = self.get_array(i_lon, i_lat)
         has_nans = np.isnan(spec).any()
-        if isinstance(self.noise, (float, int)):
-            noise = self.noise
-        else:
-            noise = self.noise[i_lon,i_lat]
+        noise = self.noise_map.get_noise(i_lon, i_lat)
         amm_spec = AmmoniaSpectrum(self.xarr, spec, noise)
         return amm_spec, has_nans
 
@@ -424,7 +464,11 @@ def get_test_cubestack(full=False):
     if not full:
         cube11 = cube11[:,155:195,155:195]
         cube22 = cube22[:,155:195,155:195]
-    cubes = (DataCube(cube11, noise=0.35), DataCube(cube22, noise=0.35))
+    noise_map = NoiseMapUniform(rms=0.35)
+    cubes = (
+            DataCube(cube11, noise_map=noise_map),
+            DataCube(cube22, noise_map=noise_map),
+    )
     stack = CubeStack(cubes)
     return stack
 

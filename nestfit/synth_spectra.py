@@ -149,8 +149,8 @@ def make_fake_header(data, xarr):
     kwds['CRPIX1'] = data.shape[0]
     kwds['CRPIX2'] = data.shape[1]
     kwds['CRPIX3'] = xarr.shape[0]
-    kwds['CRVAL3'] = xarr.refX
-    kwds['CDELT3'] = xarr[1] - xarr[0]
+    kwds['CRVAL3'] = xarr.refX.to('Hz').value
+    kwds['CDELT3'] = (xarr[1] - xarr[0]).to('Hz').value
     kwds['RESTFRQ'] = xarr.refX.to('Hz').value
     return fits.Header(kwds)
 
@@ -188,6 +188,7 @@ class ParamSampler:
 
 
 def make_indep_synth_cube():
+    outdir = 'run/synth'
     im_shape = (8, 4096)  # 8*4096 -> 32768; 8 rows for multi-processing purposes
     param_sampler = ParamSampler()
     # make synthetic cubes
@@ -208,9 +209,9 @@ def make_indep_synth_cube():
         data22[ii] = syn22.sum_spec
         pkcube[ii] = (syn11.sum_spec.max(), syn22.sum_spec.max())
     pcube = pcube.reshape(im_shape[0], im_shape[1], -1)
-    fits.PrimaryHDU(pcube).writeto('syn_params.fits', overwrite=True)
+    fits.PrimaryHDU(pcube).writeto(f'{outdir}/syn_params.fits', overwrite=True)
     pkcube = pkcube.reshape(im_shape[0], im_shape[1], -1)
-    fits.PrimaryHDU(pkcube).writeto('syn_peak.fits', overwrite=True)
+    fits.PrimaryHDU(pkcube).writeto(f'{outdir}/syn_peak.fits', overwrite=True)
     data11 = data11.reshape(im_shape[0], im_shape[1], -1)
     data22 = data22.reshape(im_shape[0], im_shape[1], -1)
     header11 = make_fake_header(data11, xarr11)
@@ -225,7 +226,7 @@ def make_indep_synth_cube():
         hdu11 = fits.PrimaryHDU(data=ndata11, header=header11)
         hdu22 = fits.PrimaryHDU(data=ndata22, header=header22)
         # write fits cube
-        hdu11.writeto(f'syn_11_rms{noise:.3f}.fits', overwrite=True)
-        hdu22.writeto(f'syn_22_rms{noise:.3f}.fits', overwrite=True)
+        hdu11.writeto(f'{outdir}/syn_11_rms{std:.3f}.fits', overwrite=True)
+        hdu22.writeto(f'{outdir}/syn_22_rms{std:.3f}.fits', overwrite=True)
 
 
