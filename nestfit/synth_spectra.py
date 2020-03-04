@@ -161,6 +161,7 @@ def add_noise_to_cube(data, std):
 
 
 class ParamSampler:
+    # FIXME change parameter distributions to match Keown & Chen
     def __init__(self, vsep=(0.16, 3), trot=(3, 30), tex=(2.8, 12),
             ntot=(13, 16), sigm=(0.15, 2)):
         """
@@ -208,12 +209,13 @@ def make_indep_synth_cube():
         data11[ii] = syn11.sum_spec
         data22[ii] = syn22.sum_spec
         pkcube[ii] = (syn11.sum_spec.max(), syn22.sum_spec.max())
-    pcube = pcube.reshape(im_shape[0], im_shape[1], -1)
+    # tranpose since FITS cubes are in Fortran ordering
+    pcube = pcube.reshape(im_shape[0], im_shape[1], -1).transpose()
     fits.PrimaryHDU(pcube).writeto(f'{outdir}/syn_params.fits', overwrite=True)
-    pkcube = pkcube.reshape(im_shape[0], im_shape[1], -1)
+    pkcube = pkcube.reshape(im_shape[0], im_shape[1], -1).transpose()
     fits.PrimaryHDU(pkcube).writeto(f'{outdir}/syn_peak.fits', overwrite=True)
-    data11 = data11.reshape(im_shape[0], im_shape[1], -1)
-    data22 = data22.reshape(im_shape[0], im_shape[1], -1)
+    data11 = data11.reshape(im_shape[0], im_shape[1], -1).transpose()
+    data22 = data22.reshape(im_shape[0], im_shape[1], -1).transpose()
     header11 = make_fake_header(data11, xarr11)
     header22 = make_fake_header(data11, xarr22)
     # add noise to cubes and then write to output FITS files

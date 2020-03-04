@@ -100,10 +100,11 @@ def test_nested(ncomp=2, prefix='test'):
 
 
 class NoiseMap:
-    def __init__(self, img):
-        # Data cube axes are transposed, so these need to be as well
-        self.img = img.transpose()
-        self.shape = img.shape
+    def __init__(self, data):
+        # NOTE The axes in the data cube are transposed, so these need to
+        # be as well
+        self.data = data.transpose()
+        self.shape = self.data.shape
 
     @classmethod
     def from_pbimg(cls, rms, pb_img):
@@ -124,7 +125,7 @@ class NoiseMap:
         return cls(img)
 
     def get_noise(self, i_lon, i_lat):
-        return self.img[i_lon, i_lat]
+        return self.data[i_lon, i_lat]
 
 
 class NoiseMapUniform:
@@ -560,11 +561,12 @@ def aggregate_store_hists(store, prod_name='independent'):
     par_names = hdf[test_group].attrs['par_names']
     n_bins = 150
     # dimensions (l, b, h, p) for histogram values
-    #   (latitude, longitude, parameter, histogram-value)
+    #   (latitude, longitude, histogram-value, parameter)
     histdata = np.empty((n_lon, n_lat, n_bins-1, n_params))
     histdata[...] = np.nan
     # set linear bins from limits of the posteriors
     # FIXME should have the limits in the store-file and get them from there
+    # FIXME should run min/max on `post` to determine values
     all_bins = [np.linspace(lo, hi, n_bins)
             for lo, hi in (
                 (63.7-4, 63.7+4), (7, 30), (2.74, 12.0), (12, 17), (0, 2),
