@@ -93,7 +93,7 @@ def test_nested(ncomp=2, prefix='test'):
         group = hdf.require_group(f'{prefix}/{ncomp}')
         dumper = Dumper(group, no_dump=True)
         runner = AmmoniaRunner(spectra, utrans, ncomp)
-        for _ in range(10):
+        for _ in range(20):
             run_multinest(runner, dumper, nlive=60, seed=5, tol=1.0, efr=0.3,
                     updInt=2000)
     return synspec, spectra, runner
@@ -314,7 +314,7 @@ class HdfStore:
                 for lon_pix in chunk_hdf['/pix']:
                     for lat_pix in chunk_hdf[f'/pix/{lon_pix}']:
                         group_name = f'/pix/{lon_pix}/{lat_pix}'
-                        group = h5py.ExternalLink(chunk_path, group_name)
+                        group = h5py.ExternalLink(chunk_path.name, group_name)
                         self.hdf[group_name] = group
                 self.hdf.flush()
 
@@ -499,8 +499,8 @@ def aggregate_store_products(store, prod_name='independent'):
     # TODO the aggregator should have a prefix to select what HDF groups are
     # getting aggregated
     hdf = store.hdf
-    n_lat = hdf.attrs['naxis1']
-    n_lon = hdf.attrs['naxis2']
+    n_lon = hdf.attrs['naxis1']
+    n_lat = hdf.attrs['naxis2']
     # get list of parameters out of cube
     # get list of marginal percentiles
     ncomp_max = hdf.attrs['n_max_components']
@@ -554,8 +554,8 @@ def aggregate_store_products(store, prod_name='independent'):
 def aggregate_store_hists(store, prod_name='independent'):
     # FIXME should be refactored into aggregate function above
     hdf = store.hdf
-    n_lat = hdf.attrs['naxis1']
-    n_lon = hdf.attrs['naxis2']
+    n_lon = hdf.attrs['naxis1']
+    n_lat = hdf.attrs['naxis2']
     test_group = f'pix/{n_lon//2}/{n_lat//2}/1'  # FIXME may not exist
     n_params  = hdf[test_group].attrs['n_params']
     par_names = hdf[test_group].attrs['par_names']

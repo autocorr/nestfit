@@ -17,7 +17,7 @@ from getdist import plots as gd_plt
 import pyspeckit
 from astropy.wcs import WCS
 
-from nestfit import (get_par_names, TEX_LABELS, TEX_LABELS_NU, PLOT_DIR)
+from nestfit import (get_par_names, TEX_LABELS, TEX_LABELS_NU)
 from nestfit.synth_spectra import (SyntheticSpectrum, get_test_spectra)
 from nestfit.wrapped import (amm11_predict, amm22_predict)
 
@@ -47,7 +47,7 @@ NBD_CMAP.set_bad('0.2')
 def save_figure(filen):
     exts = ('png', 'pdf')
     for ext in exts:
-        path = PLOT_DIR / Path(f'{filen}.{ext}')
+        path = Path(f'{filen}.{ext}')
         plt.savefig(str(path), dpi=300)
         print(f'-- {ext} saved')
     plt.close('all')
@@ -231,9 +231,11 @@ def plot_map_props(store, group='/aggregate/independent/nbest_MAP_cube',
     for ii in range(n_params):
         fig, axes = plt.subplots(nrows=1, ncols=n_mod, figsize=(8, 2.8),
                 subplot_kw={'projection': wcs})
+        vmin = np.nanmin(data[:,ii,:,:])
+        vmax = np.nanmax(data[:,ii,:,:])
         for jj, ax in enumerate(axes):
-            img = data[jj, ii, :, :]
-            im = ax.imshow(img, cmap=CLR_CMAP)
+            img = data[jj,ii,:,:]
+            im = ax.imshow(img, vmin=vmin, vmax=vmax, cmap=CLR_CMAP)
             if not ax.is_first_col():
                 ax.tick_params(axis='y', labelleft=False)
         cax = fig.add_axes([0.89, 0.20, 0.015, 0.70])
@@ -315,7 +317,7 @@ def test_wrapped_amm_precision():
     ax.set_xlabel(r'$v_\mathrm{lsr} \ [\mathrm{km\, s^{-1}}]$')
     ax.set_ylabel(r'$\log_\mathrm{10}\left( |\Delta T_\mathrm{b}| \right) \ [\mathrm{K}]$')
     plt.tight_layout()
-    plt.savefig(PLOT_DIR/Path('cython_test_compare_precision.pdf'))
+    plt.savefig(Path('cython_test_compare_precision.pdf'))
     plt.close('all')
 
 
@@ -341,7 +343,7 @@ def test_poly_partition_function():
     ax.set_xlabel(r'$T_\mathrm{rot} \ [\mathrm{K}]$')
     ax.set_ylabel(r'$Q_\mathrm{tot}$')
     plt.tight_layout()
-    plt.savefig(PLOT_DIR/Path('partition_function.pdf'))
+    plt.savefig(Path('partition_function.pdf'))
     plt.close('all')
 
 
