@@ -484,7 +484,7 @@ def test_fit_cube(store_name='run/test_cube_multin'):
     fitter.fit_cube(store_name=store_name, nproc=8)
 
 
-def aggregate_store_products(store, prod_name='independent'):
+def aggregate_store_products(store):
     """
     Aggregate the results from the individual per-pixel Nested Sampling runs
     into dense arrays of the product values.
@@ -492,12 +492,7 @@ def aggregate_store_products(store, prod_name='independent'):
     Parameters
     ----------
     store : HdfStore
-    prod_name : str
-        Name of sub-group to store the products in within the "aggregate"
-        group.
     """
-    # TODO the aggregator should have a prefix to select what HDF groups are
-    # getting aggregated
     hdf = store.hdf
     n_lon = hdf.attrs['naxis1']
     n_lat = hdf.attrs['naxis2']
@@ -544,15 +539,14 @@ def aggregate_store_products(store, prod_name='independent'):
         pardata[i_lon,i_lat,:m_shape[0],:m_shape[1],:m_shape[2]] = margs
     # transpose to dimensions (m, p, M, b, l) and then keep multi-dimensional
     # parameter cube in the HDF5 file at the native dimensions
-    dpath = f'/aggregate/{prod_name.rstrip("/")}'
+    dpath = '/aggregate'
     store.hdf.require_group(dpath)
     store.create_dataset('nbest_image', nbest_img.transpose(), group=dpath)
     store.create_dataset('nbest_MAP_cube', mapdata.transpose(), group=dpath)
     store.create_dataset('nbest_marginals_cube', pardata.transpose(), group=dpath)
 
 
-def aggregate_store_hists(store, prod_name='independent'):
-    # FIXME should be refactored into aggregate function above
+def aggregate_store_hists(store):
     hdf = store.hdf
     n_lon = hdf.attrs['naxis1']
     n_lat = hdf.attrs['naxis2']
@@ -564,13 +558,15 @@ def aggregate_store_hists(store, prod_name='independent'):
     #   (latitude, longitude, histogram-value, parameter)
     histdata = np.empty((n_lon, n_lat, n_bins-1, n_params))
     histdata[...] = np.nan
-    # set linear bins from limits of the posteriors
-    # FIXME should have the limits in the store-file and get them from there
-    # FIXME should run min/max on `post` to determine values
-    all_bins = [np.linspace(lo, hi, n_bins)
-            for lo, hi in (
-                (63.7-4, 63.7+4), (7, 30), (2.74, 12.0), (12, 17), (0, 2),
-            )
+    # Set linear bins from limits of the posterior marginal distributions.
+    # Note that 0->min and 8->max in `Dumper.quantiles` and collapse all but
+    # the second axis containing the model parameters.
+    margdata = hdf['/aggregate/nbest_marginals_cube'][...]
+    vmins = np.nanmin(margdata[:,:,0,:,:], axis=(0,2,3))
+    vmaxs = np.nanmax(margdata[:,:,8,:,:], axis=(0,2,3))
+    all_bins = [
+            np.linspace(lo, hi, n_bins)
+            for lo, hi in zip(vmins, vmaxs)
     ]
     for group in store.iter_pix_groups():
         i_lon = group.attrs['i_lon']
@@ -587,34 +583,11 @@ def aggregate_store_hists(store, prod_name='independent'):
                     density=True,
             )
             histdata[i_lon,i_lat,:,i_par] = hist * nbest
-    dpath = f'/aggregate/{prod_name}'
+    dpath = '/aggregate'
     store.hdf.require_group(dpath)
     # transpose to dimensions (p, h, b, l)
     store.create_dataset('post_hists', histdata.transpose(), group=dpath)
     store.create_dataset('hist_bins', np.array(all_bins), group=dpath)
-
-
-def store_products_to_fits(store, prod_group='independent'):
-    # TODO create header, reshape, and store as FITS
-    #fits_header = fits.Header()
-    #header_group = hdf['simple_header']
-    #n_newax = n_margs * n_params * ncomp_max
-    #for k, v in header_group:
-    #    fits_header[k] = header_group[k]
-    #fits_header.update({
-    #    'NAXIS':  3,
-    #    'NAXIS3': n_newax,
-    #    'CTYPE3': 'PARAM',
-    #    'CRVAL3': 1.,
-    #    'CDELT3': 1.,
-    #    'CRPIX3': 1.,
-    #    'CUNIT3': '',
-    #})
-    #fits_data = pardata.reshape((n_newax, n_lon, n_lat))
-    ## copy header and edit for 3-axis parameter cube
-    #hdu = fits.PrimaryHDU(data=fits_data, header=fits_header)
-    #hdu.writeto(f'{hdf.store_name}_marginals.fits')
-    pass
 
 
 def test_pyspeckit_profiling_compare(n=100):
