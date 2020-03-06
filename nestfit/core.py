@@ -350,6 +350,7 @@ class HdfStore:
 
     def create_dataset(self, dset_name, data, group='', clobber=True):
         assert len(dset_name) > 0
+        self.hdf.require_group(group)
         path = f'{group.rstrip("/")}/{dset_name}'
         if path in self.hdf and clobber:
             warnings.warn(f'Deleting dataset "{path}"', RuntimeWarning)
@@ -484,51 +485,147 @@ def test_fit_cube(store_name='run/test_cube_multin'):
     fitter.fit_cube(store_name=store_name, nproc=8)
 
 
-def aggregate_store_products(store):
+def nans(shape, dtype=None):
+    return np.full(shape, np.nan, dtype=dtype)
+
+
+# TODO re-order the post-processing functions to use convolved
+# x make evidence and attribute maps
+# x convolve evidence maps into conv_nbest
+# x use conv_nbest for making later products instead of using the group attrib
+# - use convolution weighting for model mixing / weighted-sum of the posteriors
+
+def aggregate_store_attributes(store):
     """
-    Aggregate the results from the individual per-pixel Nested Sampling runs
-    into dense arrays of the product values. Products include:
-        * 'nbest_image' (b, l) -- map of N_best
-        * 'nbest_MAP_cube' (m, p, b, l) -- cube of maximum a posteriori values
-        * 'nbest_marginals_cube' (m, p, M, b, l) -- marginal quantiles cube
+    Aggregate the attribute values into a dense array from the individual
+    per-pixel Nested Sampling runs. Products include:
+        * 'nbest' (b, l)
+        * 'evidence' (m, b, l)
+        * 'evidence_err' (m, b, l)
+        * 'AIC' (m, b, l)
+        * 'AICc' (m, b, l)
+        * 'BIC' (m, b, l)
 
     Parameters
     ----------
     store : HdfStore
     """
+    dpath = '/aggregate'
     hdf = store.hdf
     n_lon = hdf.attrs['naxis1']
     n_lat = hdf.attrs['naxis2']
-    # get list of parameters out of cube
-    # get list of marginal percentiles
     ncomp_max = hdf.attrs['n_max_components']
-    test_group = f'pix/{n_lon//2}/{n_lat//2}/1'  # FIXME may not exist
-    n_params  = hdf[test_group].attrs['n_params']
-    marg_cols = hdf[test_group].attrs['marg_cols']
-    marg_quan = hdf[test_group].attrs['marg_quantiles']
+    # dimensions (l, b, m) for evidence values
+    #   (latitude, longitude, model)
+    attrib_shape = (n_lon, n_lat, ncomp_max+1)
+    lnz_data = nans(attrib_shape)
+    lnzerr_data = nans(attrib_shape)
+    bic_data = nans(attrib_shape)
+    aic_data = nans(attrib_shape)
+    aicc_data = nans(attrib_shape)
+    # dimensions (l, b) for N-best
+    nb_data = np.full((n_lon, n_lat), -1, dtype=np.int32)
+    for group in store.iter_pix_groups():
+        i_lon = group.attrs['i_lon']
+        i_lat = group.attrs['i_lat']
+        nbest = group.attrs['nbest']
+        nb_data[i_lon,i_lat] = nbest
+        print(f'-- ({i_lon}, {i_lat}) aggregating values')
+        for model in group:
+            subg = group[model]
+            ncomp = subg.attrs['ncomp']
+            if ncomp == 1:
+                lnz_data[i_lon,i_lat,0]  = subg.attrs['null_lnZ']
+                bic_data[i_lon,i_lat,0]  = subg.attrs['null_BIC']
+                aic_data[i_lon,i_lat,0]  = subg.attrs['null_AIC']
+                aicc_data[i_lon,i_lat,0] = subg.attrs['null_AICC']
+            lnz_data[i_lon,i_lat,ncomp] = subg.attrs['global_lnZ']
+            lnzerr_data[i_lon,i_lat,ncomp] = subg.attrs['global_lnZ_err']
+            bic_data[i_lon,i_lat,ncomp]  = subg.attrs['BIC']
+            aic_data[i_lon,i_lat,ncomp]  = subg.attrs['AIC']
+            aicc_data[i_lon,i_lat,ncomp] = subg.attrs['AICc']
+    # transpose to dimensions (m, b, l)
+    store.create_dataset('evidence', lnz_data.transpose(), group=dpath)
+    store.create_dataset('evidence_err', lnzerr_data.tranpose(), group=dpath)
+    store.create_dataset('BIC', bic_data.tranpose(), group=dpath)
+    store.create_dataset('AIC', aic_data.tranpose(), group=dpath)
+    store.create_dataset('AICc', aicc_data.tranpose(), group=dpath)
+    # transpose to dimensions (b, l)
+    store.create_dataset('nbest', nb_data.transpose(), group=dpath)
+
+
+def convolve_evidence(store, std_pix):
+    """
+    Convolve the evidence maps and re-select the preferred number of model
+    components. Products include:
+        * 'conv_evidence' (m, b, l)
+        * 'conv_nbest' (b, l)
+
+    Parameters
+    ----------
+    store : HdfStore
+    std_pix : number
+        Standard deviation of the convolution kernel in map pixels
+    """
+    hdf = store.hdf
+    dpath = '/aggregate'
+    ncomp_max = hdf.attrs['n_max_components']
+    lnZ_thresh = hdf.attrs['lnZ_threshold']
+    data = hdf[f'{dpath}/evidence'][...]
+    cdata = np.zeros_like(data)
+    # Spatially convolve evidence values. The convolution operator is
+    # distributive, so C(Z1-Z0) should equal C(Z1)-C(Z0).
+    kernel = convolution.Gaussian2DKernel(std_pix)
+    for i in range(data.shape[0]):
+        cdata[i,:,:] = convolution.convolve_fft(data[i,:,:], kernel)
+    # Re-compute N-best with convolved data
+    nbest = np.zeros_like(cdata[0], dtype=np.int64)
+    for i in range(ncomp_max):
+        nbest[lnZ_thresh < cdata[i+1] - cdata[i]] = i+1
+    store.create_dataset('conv_evidence', cdata, group=dpath)
+    store.create_dataset('conv_nbest', nbest, group=dpath)
+
+
+def aggregate_store_products(store):
+    """
+    Aggregate the results from the individual per-pixel Nested Sampling runs
+    into dense arrays of the product values. Products include:
+        * 'nbest_MAP' (m, p, b, l) -- cube of maximum a posteriori values
+        * 'nbest_marginals' (m, p, M, b, l) -- marginal quantiles cube
+
+    Parameters
+    ----------
+    store : HdfStore
+    """
+    dpath = '/aggregate'
+    hdf = store.hdf
+    n_lon = hdf.attrs['naxis1']
+    n_lat = hdf.attrs['naxis2']
+    # transpose from (b, l) -> (l, b) for consistency
+    nbest_data = hdf[f'{dpath}/conv_nbest'][...].transpose()
+    # get list of marginal quantile information out of store
+    ncomp_max = hdf.attrs['n_max_components']
+    test_group = hdf[f'pix/{n_lon//2}/{n_lat//2}/1']  # FIXME may not exist
+    n_params  = test_group.attrs['n_params']
+    marg_cols = test_group.attrs['marg_cols']
+    marg_quan = test_group.attrs['marg_quantiles']
     n_margs   = len(marg_cols)
-    # dimensions (l, b) for Nbest map
-    nbest_img = np.empty((n_lon, n_lat), dtype=np.int64)
-    nbest_img[...] = np.nan
     # dimensions (l, b, p, m) for MAP-parameter values
     #   (latitude, longitude, parameter, model)
-    mapdata = np.empty((n_lon, n_lat, n_params, ncomp_max))
-    mapdata[...] = np.nan
+    mapdata = nans((n_lon, n_lat, n_params, ncomp_max))
     # dimensions (l, b, M, p, m) for posterior distribution marginals
     #   (latitude, longitude, marginal, parameter, model)
     # in C order, the right-most index varies the fastest
-    pardata = np.empty((n_lon, n_lat, n_margs, n_params, ncomp_max))
-    pardata[...] = np.nan
+    pardata = nans((n_lon, n_lat, n_margs, n_params, ncomp_max))
     # aggregate marginals into pardata
     for group in store.iter_pix_groups():
         i_lon = group.attrs['i_lon']
         i_lat = group.attrs['i_lat']
         print(f'-- ({i_lon}, {i_lat}) aggregating values')
-        nbest = group.attrs['nbest']
+        nbest = nbest_data[i_lon,i_lat]
         if nbest == 0:
             continue
         nb_group = group[f'{nbest}']
-        nbest_img[i_lon,i_lat] = nbest
         # convert MAP params from 1D array to 2D for:
         #   (p*m) -> (p, m)
         p_shape = (n_params, nbest)
@@ -541,11 +638,9 @@ def aggregate_store_products(store):
         pardata[i_lon,i_lat,:m_shape[0],:m_shape[1],:m_shape[2]] = margs
     # transpose to dimensions (m, p, M, b, l) and then keep multi-dimensional
     # parameter cube in the HDF5 file at the native dimensions
-    dpath = '/aggregate'
-    store.hdf.require_group(dpath)
-    store.create_dataset('nbest_image', nbest_img.transpose(), group=dpath)
-    store.create_dataset('nbest_MAP_cube', mapdata.transpose(), group=dpath)
-    store.create_dataset('nbest_marginals_cube', pardata.transpose(), group=dpath)
+    store.create_dataset('nbest', nbest_img.transpose(), group=dpath)
+    store.create_dataset('nbest_MAP', mapdata.transpose(), group=dpath)
+    store.create_dataset('nbest_marginals', pardata.transpose(), group=dpath)
 
 
 def aggregate_store_hists(store):
@@ -559,20 +654,21 @@ def aggregate_store_hists(store):
     ----------
     store : HdfStore
     """
+    dpath = '/aggregate'
     hdf = store.hdf
     n_lon = hdf.attrs['naxis1']
     n_lat = hdf.attrs['naxis2']
-    test_group = f'pix/{n_lon//2}/{n_lat//2}/1'  # FIXME may not exist
-    n_params  = hdf[test_group].attrs['n_params']
+    nb_data = hdf[f'{dpath}/conv_nbest'][...].tranpose()
+    test_group = hdf[f'pix/{n_lon//2}/{n_lat//2}/1']  # FIXME may not exist
+    n_params  = test_group.attrs['n_params']
     n_bins = 150
     # dimensions (l, b, h, p) for histogram values
     #   (latitude, longitude, histogram-value, parameter)
-    histdata = np.empty((n_lon, n_lat, n_bins-1, n_params))
-    histdata[...] = np.nan
+    histdata = nans((n_lon, n_lat, n_bins-1, n_params))
     # Set linear bins from limits of the posterior marginal distributions.
     # Note that 0->min and 8->max in `Dumper.quantiles` and collapse all but
     # the second axis containing the model parameters.
-    margdata = hdf['/aggregate/nbest_marginals_cube'][...]
+    margdata = hdf['/aggregate/nbest_marginals'][...]
     vmins = np.nanmin(margdata[:,:,0,:,:], axis=(0,2,3))
     vmaxs = np.nanmax(margdata[:,:,8,:,:], axis=(0,2,3))
     all_bins = [
@@ -583,7 +679,7 @@ def aggregate_store_hists(store):
         i_lon = group.attrs['i_lon']
         i_lat = group.attrs['i_lat']
         print(f'-- ({i_lon}, {i_lat}) aggregating values')
-        nbest = group.attrs['nbest']
+        nbest = nb_data[i_lon,i_lat]
         if nbest == 0:
             continue
         nb_group = group[f'{nbest}']
@@ -594,69 +690,9 @@ def aggregate_store_hists(store):
                     density=True,
             )
             histdata[i_lon,i_lat,:,i_par] = hist * nbest
-    dpath = '/aggregate'
-    store.hdf.require_group(dpath)
     # transpose to dimensions (p, h, b, l)
     store.create_dataset('post_hists', histdata.transpose(), group=dpath)
     store.create_dataset('hist_bins', np.array(all_bins), group=dpath)
-
-
-def aggregate_store_attributes(store):
-    """
-    Aggregate the attribute values into a dense array from the individual
-    per-pixel Nested Sampling runs. Products include:
-        * 'evidence' (m, b, l)
-        * 'evidence_err' (m, b, l)
-        * 'AIC' (m, b, l)
-        * 'AICc' (m, b, l)
-        * 'BIC' (m, b, l)
-
-    Parameters
-    ----------
-    store : HdfStore
-    """
-    hdf = store.hdf
-    n_lon = hdf.attrs['naxis1']
-    n_lat = hdf.attrs['naxis2']
-    ncomp_max = hdf.attrs['n_max_components']
-    test_group = f'pix/{n_lon//2}/{n_lat//2}/1'  # FIXME may not exist
-    # dimensions (l, b, m) for evidence values
-    #   (latitude, longitude, model)
-    lnz_data = np.empty((n_lon, n_lat, ncomp_max+1))
-    lnz_data[...] = np.nan
-    lnzerr_data = np.empty_like(lnz_data)
-    lnzerr_data[...] = np.nan
-    bic_data = np.empty_like(lnz_data)
-    bic_data[...] = np.nan
-    aic_data = np.empty_like(lnz_data)
-    aic_data[...] = np.nan
-    aicc_data = np.empty_like(lnz_data)
-    aicc_data[...] = np.nan
-    for group in store.iter_pix_groups():
-        i_lon = group.attrs['i_lon']
-        i_lat = group.attrs['i_lat']
-        print(f'-- ({i_lon}, {i_lat}) aggregating values')
-        for model in group:
-            subg = group['model']
-            ncomp = subg['attrs']
-            if ncomp == 1:
-                lnz_data[i_lon,i_lat,0]  = subg.attrs['null_lnZ']
-                bic_data[i_lon,i_lat,0]  = subg.attrs['null_BIC']
-                aic_data[i_lon,i_lat,0]  = subg.attrs['null_AIC']
-                aicc_data[i_lon,i_lat,0] = subg.attrs['null_AICC']
-            lnz_data[i_lon,i_lat,ncomp] = subg.attrs['global_lnZ']
-            lnzerr_data[i_lon,i_lat,ncomp] = subg.attrs['global_lnZ_err']
-            bic_data[i_lon,i_lat,ncomp]  = subg.attrs['BIC']
-            aic_data[i_lon,i_lat,ncomp]  = subg.attrs['AIC']
-            aicc_data[i_lon,i_lat,ncomp] = subg.attrs['AICc']
-    # transpose to dimensions (m, b, l)
-    dpath = '/aggregate'
-    store.hdf.require_group(dpath)
-    store.create_dataset('evidence', lnz_data.transpose(), group=dpath)
-    store.create_dataset('evidence_err', lnzerr_data.tranpose(), group=dpath)
-    store.create_dataset('BIC', bic_data.tranpose(), group=dpath)
-    store.create_dataset('AIC', aic_data.tranpose(), group=dpath)
-    store.create_dataset('AICc', aicc_data.tranpose(), group=dpath)
 
 
 def test_pyspeckit_profiling_compare(n=100):
