@@ -17,6 +17,7 @@ cdef extern from 'math.h' nogil:
     const double M_PI
     double c_abs 'abs' (double)
     double c_exp 'exp' (double)
+    double c_log 'log' (double)
     double c_sqrt 'sqrt' (double)
     double c_floor 'floor' (double)
 
@@ -153,7 +154,7 @@ cdef class AmmoniaSpectrum:
         self.pred = np.zeros_like(data)
         self.tarr = np.zeros_like(data)
         self.prefactor = -self.size / 2 * np.log(2 * np.pi * noise**2)
-        # note that `pred` is zeros when this is calculated, it is simply the
+        # NOTE `pred` is zeros when this is calculated, it is simply the
         # computed likelihood of a "zero constant" model or "null model"
         self.null_lnZ = self.loglikelihood()
 
@@ -664,6 +665,7 @@ cdef void mn_dump(int *n_samples, int *n_live, int *n_params,
             double *lnZ_err, void *context):
     # NOTE all multi-dimensional arrays have Fortran stride
     cdef:
+        double n, k, nullL, bic, aic, aicc, null_bic, null_aic, null_aicc
         Dumper dumper = (<Context> context).dumper
         Runner runner = (<Context> context).runner
     dumper.n_calls += 1
@@ -692,15 +694,22 @@ cdef void mn_dump(int *n_samples, int *n_live, int *n_params,
     group.attrs['marg_cols']      = dumper.marginal_cols
     group.attrs['marg_quantiles'] = dumper.quantiles
     # information criteria
-    n = runner.n_chan_tot
-    k = runner.n_params
+    n = <double>(runner.n_chan_tot)
+    k = <double>(runner.n_params)
+    nullL = runner.null_lnZ
     maxL = max_loglike[0]
-    bic  = np.log(n) * k - 2 * maxL
+    bic  = c_log(n) * k - 2 * maxL
     aic  = 2 * k - 2 * maxL
     aicc = aic + (2 * k**2 + 2 * k) / (n - k - 1)
+    null_bic  = c_log(n) * k - 2 * nullL
+    null_aic  = 2 * k - 2 * nullL
+    null_aicc = null_aic + (2 * k**2 + 2 * k) / (n - k - 1)
     group.attrs['BIC']  = bic
     group.attrs['AIC']  = aic
     group.attrs['AICc'] = aicc
+    group.attrs['null_BIC']  = null_bic
+    group.attrs['null_AIC']  = null_aic
+    group.attrs['null_AICc'] = null_aicc
     # posterior samples
     post_shape = (n_samples[0], n_params[0]+2)
     post_arr = mn_dptr_to_ndarray(posterior, post_shape)

@@ -487,7 +487,10 @@ def test_fit_cube(store_name='run/test_cube_multin'):
 def aggregate_store_products(store):
     """
     Aggregate the results from the individual per-pixel Nested Sampling runs
-    into dense arrays of the product values.
+    into dense arrays of the product values. Products include:
+        * 'nbest_image' (b, l) -- map of N_best
+        * 'nbest_MAP_cube' (m, p, b, l) -- cube of maximum a posteriori values
+        * 'nbest_marginals_cube' (m, p, M, b, l) -- marginal quantiles cube
 
     Parameters
     ----------
@@ -501,7 +504,6 @@ def aggregate_store_products(store):
     ncomp_max = hdf.attrs['n_max_components']
     test_group = f'pix/{n_lon//2}/{n_lat//2}/1'  # FIXME may not exist
     n_params  = hdf[test_group].attrs['n_params']
-    par_names = hdf[test_group].attrs['par_names']
     marg_cols = hdf[test_group].attrs['marg_cols']
     marg_quan = hdf[test_group].attrs['marg_quantiles']
     n_margs   = len(marg_cols)
@@ -547,12 +549,21 @@ def aggregate_store_products(store):
 
 
 def aggregate_store_hists(store):
+    """
+    Aggregate the results from the individual per-pixel Nested Sampling runs
+    into a dense multi-dimensional histogram of the posterior distributions.
+    Products include:
+        * 'post_hists' (p, h, b, l) -- histogram cube of posteriors
+
+    Parameters
+    ----------
+    store : HdfStore
+    """
     hdf = store.hdf
     n_lon = hdf.attrs['naxis1']
     n_lat = hdf.attrs['naxis2']
     test_group = f'pix/{n_lon//2}/{n_lat//2}/1'  # FIXME may not exist
     n_params  = hdf[test_group].attrs['n_params']
-    par_names = hdf[test_group].attrs['par_names']
     n_bins = 150
     # dimensions (l, b, h, p) for histogram values
     #   (latitude, longitude, histogram-value, parameter)
@@ -588,6 +599,64 @@ def aggregate_store_hists(store):
     # transpose to dimensions (p, h, b, l)
     store.create_dataset('post_hists', histdata.transpose(), group=dpath)
     store.create_dataset('hist_bins', np.array(all_bins), group=dpath)
+
+
+def aggregate_store_attributes(store):
+    """
+    Aggregate the attribute values into a dense array from the individual
+    per-pixel Nested Sampling runs. Products include:
+        * 'evidence' (m, b, l)
+        * 'evidence_err' (m, b, l)
+        * 'AIC' (m, b, l)
+        * 'AICc' (m, b, l)
+        * 'BIC' (m, b, l)
+
+    Parameters
+    ----------
+    store : HdfStore
+    """
+    hdf = store.hdf
+    n_lon = hdf.attrs['naxis1']
+    n_lat = hdf.attrs['naxis2']
+    ncomp_max = hdf.attrs['n_max_components']
+    test_group = f'pix/{n_lon//2}/{n_lat//2}/1'  # FIXME may not exist
+    # dimensions (l, b, m) for evidence values
+    #   (latitude, longitude, model)
+    lnz_data = np.empty((n_lon, n_lat, ncomp_max+1))
+    lnz_data[...] = np.nan
+    lnzerr_data = np.empty_like(lnz_data)
+    lnzerr_data[...] = np.nan
+    bic_data = np.empty_like(lnz_data)
+    bic_data[...] = np.nan
+    aic_data = np.empty_like(lnz_data)
+    aic_data[...] = np.nan
+    aicc_data = np.empty_like(lnz_data)
+    aicc_data[...] = np.nan
+    for group in store.iter_pix_groups():
+        i_lon = group.attrs['i_lon']
+        i_lat = group.attrs['i_lat']
+        print(f'-- ({i_lon}, {i_lat}) aggregating values')
+        for model in group:
+            subg = group['model']
+            ncomp = subg['attrs']
+            if ncomp == 1:
+                lnz_data[i_lon,i_lat,0]  = subg.attrs['null_lnZ']
+                bic_data[i_lon,i_lat,0]  = subg.attrs['null_BIC']
+                aic_data[i_lon,i_lat,0]  = subg.attrs['null_AIC']
+                aicc_data[i_lon,i_lat,0] = subg.attrs['null_AICC']
+            lnz_data[i_lon,i_lat,ncomp] = subg.attrs['global_lnZ']
+            lnzerr_data[i_lon,i_lat,ncomp] = subg.attrs['global_lnZ_err']
+            bic_data[i_lon,i_lat,ncomp]  = subg.attrs['BIC']
+            aic_data[i_lon,i_lat,ncomp]  = subg.attrs['AIC']
+            aicc_data[i_lon,i_lat,ncomp] = subg.attrs['AICc']
+    # transpose to dimensions (m, b, l)
+    dpath = '/aggregate'
+    store.hdf.require_group(dpath)
+    store.create_dataset('evidence', lnz_data.transpose(), group=dpath)
+    store.create_dataset('evidence_err', lnzerr_data.tranpose(), group=dpath)
+    store.create_dataset('BIC', bic_data.tranpose(), group=dpath)
+    store.create_dataset('AIC', aic_data.tranpose(), group=dpath)
+    store.create_dataset('AICc', aicc_data.tranpose(), group=dpath)
 
 
 def test_pyspeckit_profiling_compare(n=100):
