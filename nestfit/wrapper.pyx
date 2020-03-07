@@ -337,8 +337,10 @@ def amm22_predict(AmmoniaSpectrum s, double[::1] params):
 cdef class Prior:
     cdef:
         int size, p_ix
-        double dx, dmin, dmax
+        double dx
         double[::1] data
+    cdef readonly:
+        double dmin, dmax
 
     def __init__(self, data, p_ix):
         """
