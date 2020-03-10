@@ -166,6 +166,12 @@ cdef class AmmoniaSpectrum:
             lnL += square(self.data[i] - self.pred[i])
         return self.prefactor - lnL / (2 * square(self.noise))
 
+    cpdef double sum_spec(self):
+        return np.nansum(self.pred)
+
+    cpdef double max_spec(self):
+        return np.nanmax(self.pred)
+
 
 cdef inline double partition_func(double trot) nogil:
     cdef:

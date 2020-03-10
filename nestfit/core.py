@@ -18,7 +18,6 @@ from pathlib import Path
 import h5py
 import numpy as np
 import scipy as sp
-import pandas as pd
 
 import pyspeckit
 import spectral_cube
@@ -57,10 +56,10 @@ def get_irdc_priors(size=500, vsys=0.0):
     # evaluates to 0.999045 .
     epsilon = 1e-13
     x = np.linspace(0, 1-epsilon, size)
-    dist_voff = sp.stats.beta(5.0, 5.0)
-    dist_vdep = sp.stats.beta(1.5, 3.5)
+    dist_voff = sp.stats.beta( 5.0,  5.0)
+    dist_vdep = sp.stats.beta( 1.5,  3.5)
     dist_trot = sp.stats.gamma(4.4, scale=0.070)
-    dist_tex  = sp.stats.beta(1.0, 2.5)
+    dist_tex  = sp.stats.beta( 1.0,  2.5)
     dist_ntot = sp.stats.beta(16.0, 14.0)
     dist_sigm = sp.stats.gamma(1.5, loc=0.03, scale=0.2)
     # interpolation values, transformed to the intervals:
@@ -150,6 +149,7 @@ class DataCube:
         else:
             self.noise_map = noise_map
         self._header = cube.header.copy()
+        self.dv = self.get_chan_width(cube)
         self.data, self.xarr = self.data_from_cube(cube)
         self.shape = self.data.shape
         # NOTE data is transposed so (s, b, l) -> (l, b, s)
@@ -185,6 +185,10 @@ class DataCube:
         assert hdict['CTYPE1'].split('-')[0].lower() in coord_sys
         assert hdict['CTYPE2'].split('-')[0].lower() in coord_sys
         return hdict
+
+    def get_chan_width(self, cube):
+        axis = cube.with_spectral_unit('km/s').spectral_axis
+        return abs(axis[1] - axis[0]).value
 
     def data_from_cube(self, cube):
         cube = cube.to('K').with_spectral_unit('Hz')
@@ -535,7 +539,7 @@ def aggregate_store_attributes(store):
                 lnz_data[i_lon,i_lat,0]  = subg.attrs['null_lnZ']
                 bic_data[i_lon,i_lat,0]  = subg.attrs['null_BIC']
                 aic_data[i_lon,i_lat,0]  = subg.attrs['null_AIC']
-                aicc_data[i_lon,i_lat,0] = subg.attrs['null_AICC']
+                aicc_data[i_lon,i_lat,0] = subg.attrs['null_AICc']
             lnz_data[i_lon,i_lat,ncomp] = subg.attrs['global_lnZ']
             lnzerr_data[i_lon,i_lat,ncomp] = subg.attrs['global_lnZ_err']
             bic_data[i_lon,i_lat,ncomp]  = subg.attrs['BIC']
@@ -545,10 +549,10 @@ def aggregate_store_attributes(store):
     store.create_dataset('nbest', nb_data.transpose(), group=dpath)
     # transpose to dimensions (m, b, l)
     store.create_dataset('evidence', lnz_data.transpose(), group=dpath)
-    store.create_dataset('evidence_err', lnzerr_data.tranpose(), group=dpath)
-    store.create_dataset('BIC', bic_data.tranpose(), group=dpath)
-    store.create_dataset('AIC', aic_data.tranpose(), group=dpath)
-    store.create_dataset('AICc', aicc_data.tranpose(), group=dpath)
+    store.create_dataset('evidence_err', lnzerr_data.transpose(), group=dpath)
+    store.create_dataset('BIC', bic_data.transpose(), group=dpath)
+    store.create_dataset('AIC', aic_data.transpose(), group=dpath)
+    store.create_dataset('AICc', aicc_data.transpose(), group=dpath)
 
 
 def convolve_evidence(store, std_pix):
@@ -569,7 +573,10 @@ def convolve_evidence(store, std_pix):
     dpath = store.dpath
     ncomp_max = hdf.attrs['n_max_components']
     lnZ_thresh = hdf.attrs['lnZ_threshold']
+    # dimensions (m, b, l)
     data = hdf[f'{dpath}/evidence'][...]
+    # dimensions (b, l)
+    nbest = hdf[f'{dpath}/nbest'][...]
     cdata = np.zeros_like(data)
     # Spatially convolve evidence values. The convolution operator is
     # distributive, so C(Z1-Z0) should equal C(Z1)-C(Z0).
@@ -577,11 +584,25 @@ def convolve_evidence(store, std_pix):
     for i in range(data.shape[0]):
         cdata[i,:,:] = convolution.convolve_fft(data[i,:,:], kernel)
     # Re-compute N-best with convolved data
-    nbest = np.zeros_like(cdata[0], dtype=np.int64)
+    conv_nbest = np.full(cdata[0].shape, 0, dtype=np.int32)
     for i in range(ncomp_max):
-        nbest[lnZ_thresh < cdata[i+1] - cdata[i]] = i+1
+        # each step must pass the evidence threshold, eg both 0->1 and 1->2
+        # where 1->2 should not be chosen if 0->1 was not.
+        conv_nbest[
+                (conv_nbest == i) &
+                (cdata[i+1] - cdata[i] > lnZ_thresh)
+        ] += 1
+    # refill the "NaN" values
+    conv_nbest[nbest == -1] = -1
+    # Guard change in Nbest to no more than +1. In practice this should only apply
+    # to a very small number of pixels but it will create errors because a jump
+    # of +2 will not have had a model run for it.
+    overshot = conv_nbest - nbest >= 2
+    conv_nbest[overshot] = nbest[overshot] + 1
+    # dimensions (b, l)
+    store.create_dataset('conv_nbest', conv_nbest, group=dpath)
+    # dimensions (m, b, l)
     store.create_dataset('conv_evidence', cdata, group=dpath)
-    store.create_dataset('conv_nbest', nbest, group=dpath)
 
 
 def aggregate_store_products(store):
@@ -620,7 +641,6 @@ def aggregate_store_products(store):
     for group in store.iter_pix_groups():
         i_lon = group.attrs['i_lon']
         i_lat = group.attrs['i_lat']
-        print(f'-- ({i_lon}, {i_lat}) aggregating values')
         nbest = nbest_data[i_lon,i_lat]
         if nbest == 0:
             continue
@@ -635,17 +655,18 @@ def aggregate_store_products(store):
         m_shape = (n_margs, n_params, nbest)
         margs = nb_group['marginals'][...].reshape(m_shape)
         pardata[i_lon,i_lat,:m_shape[0],:m_shape[1],:m_shape[2]] = margs
-    # transpose to dimensions (m, p, M, b, l) and then keep multi-dimensional
-    # parameter cube in the HDF5 file at the native dimensions
+    # dimensions (M)
     store.create_dataset('marg_quantiles', marg_quan, group=dpath)
+    # transpose to dimensions (m, p, b, l)
     store.create_dataset('nbest_MAP', mapdata.transpose(), group=dpath)
+    # transpose to dimensions (m, p, M, b, l)
     store.create_dataset('nbest_marginals', pardata.transpose(), group=dpath)
 
 
-def aggregate_store_pdfs(store):
+def aggregate_store_pdfs(store, par_bins=None):
     """
-    Aggregate the results from the individual per-pixel Nested Sampling runs
-    into a dense multi-dimensional histogram of the posterior distributions.
+    Aggregate the results from the individual per-pixel set of posterior
+    samples into one-dimensional marginalized PDFs of the parameter posteriors.
     Products include:
         * 'pdf_bins' (p, h)
         * 'post_pdfs' (m, p, h, b, l)
@@ -653,52 +674,62 @@ def aggregate_store_pdfs(store):
     Parameters
     ----------
     store : HdfStore
+    par_bins : None or array (p, h+1)
+        Histogram bin edges for each parameter. Note that the bin mid-points
+        will be stored in the 'pdf_bins' array. If unset, then bins are created
+        from the min and max values of the posteriors.
     """
-    print(':: Aggregating store marginal posterior PDFs')
+    print(':: Aggregating store marginalized posterior PDFs')
     hdf = store.hdf
     dpath = store.dpath
     n_lon = hdf.attrs['naxis1']
     n_lat = hdf.attrs['naxis2']
     ncomp_max = hdf.attrs['n_max_components']
-    nb_data = hdf[f'{dpath}/conv_nbest'][...].tranpose()
+    nb_data = hdf[f'{dpath}/conv_nbest'][...].transpose()
     test_group = hdf[f'pix/{n_lon//2}/{n_lat//2}/1']  # FIXME may not exist
     n_params  = test_group.attrs['n_params']
-    n_bins = 200
+    # If no bins set, set bins from linear intervals of the posteriors
+    if par_bins is None:
+        n_bins = 200
+        # Set linear bins from limits of the posterior marginal distributions.
+        # Note that 0->min and 8->max in `Dumper.quantiles` and collapse all but
+        # the second axis containing the model parameters.
+        margdata = hdf[f'{dpath}/nbest_marginals'][...]
+        vmins = np.nanmin(margdata[:,:,0,:,:], axis=(0,2,3))
+        vmaxs = np.nanmax(margdata[:,:,8,:,:], axis=(0,2,3))
+        par_bins = np.array([
+                np.linspace(lo, hi, n_bins)
+                for lo, hi in zip(vmins, vmaxs)
+        ])
+    else:
+        n_bins = par_bins.shape[1]
     # dimensions (l, b, h, p, m) for histogram values
     #   (longitude, latitude, histogram-value, parameter, model)
     histdata = nans((n_lon, n_lat, n_bins-1, n_params, ncomp_max))
-    # Set linear bins from limits of the posterior marginal distributions.
-    # Note that 0->min and 8->max in `Dumper.quantiles` and collapse all but
-    # the second axis containing the model parameters.
-    margdata = hdf[f'{dpath}/nbest_marginals'][...]
-    vmins = np.nanmin(margdata[:,:,0,:,:], axis=(0,2,3))
-    vmaxs = np.nanmax(margdata[:,:,8,:,:], axis=(0,2,3))
-    all_bins = [
-            np.linspace(lo, hi, n_bins)
-            for lo, hi in zip(vmins, vmaxs)
-    ]
     for group in store.iter_pix_groups():
         i_lon = group.attrs['i_lon']
         i_lat = group.attrs['i_lat']
-        print(f'-- ({i_lon}, {i_lat}) aggregating values')
         nbest = nb_data[i_lon,i_lat]
         if nbest == 0:
             continue
         nb_group = group[f'{nbest}']
         post = nb_group['posteriors']
-        for i_par, bins in enumerate(all_bins):
-            for j_par in range(ncomp_max):
-                ix = i_par * ncomp_max + j_par
+        for i_par, bins in enumerate(par_bins):
+            for j_par in range(nbest):
+                ix = i_par * nbest + j_par
                 hist, _ = np.histogram(
                         post[:,ix], bins=bins, density=True,
                 )
                 histdata[i_lon,i_lat,:,i_par,j_par] = hist
+    # convert bin edges to bin mid-points
+    # dimensions (m, h)
+    bin_mids = (par_bins[:,:-1] + par_bins[:,1:]) / 2
+    store.create_dataset('pdf_bins', bin_mids, group=dpath)
     # transpose to dimensions (m, p, h, b, l)
-    store.create_dataset('pdf_bins', np.array(all_bins), group=dpath)
     store.create_dataset('post_pdfs', histdata.transpose(), group=dpath)
 
 
-def convolve_post_hists(store, std_pix):
+def convolve_post_pdfs(store, std_pix):
     """
     Convolve the evidence maps and re-select the preferred number of model
     components. Products include:
@@ -725,13 +756,18 @@ def convolve_post_hists(store, std_pix):
             range(data.shape[1]),
             range(data.shape[2]),
     )
+    # TODO weight the marginal distributions by their lnZ
+    # get evidence cube, vector multiply across `data` before convolution,
+    # and then divide `data` by convolved evidence cube to normalize.
     for i_m, i_p, i_h in cart_prod:
         cdata[i_m,i_p,i_h,:,:] = convolution.convolve_fft(
                 data[i_m,i_p,i_h,:,:], kernel)
+    # re-mask the NaN positions
+    cdata[np.isnan(data)] = np.nan
     store.create_dataset('conv_post_pdfs', cdata, group=dpath)
 
 
-def aggregate_conv_pdfs(store):
+def quantize_conv_marginals(store):
     """
     Calculate weighted quantiles of convolved posterior marginal distributions.
     Products include:
@@ -751,34 +787,104 @@ def aggregate_conv_pdfs(store):
     # dimensions (m, p, h, b, l)
     #   transposed to (m, p, b, l, h)
     data = hdf[f'{dpath}/conv_post_pdfs'][...]
-    data = data.tranpose((0, 1, 3, 4, 2))
-    data = np.cumsum(data, axis=4) / np.sum(data, axis=4)
+    data = data.transpose((0, 1, 3, 4, 2))
+    data = np.cumsum(data, axis=4) / np.sum(data, axis=4, keepdims=True)
     # dimensions (m, p, b, l, M)
-    # TODO tranpose to more efficient axes ordering
     margs_shape = list(data.shape)
     margs_shape[-1] = len(quan)
-    margs = np.empty(margs_shape)
+    margs = nans(margs_shape)
     cart_prod = itertools.product(
             range(data.shape[0]),
             range(data.shape[2]),
             range(data.shape[3]),
     )
     for i_p, x in enumerate(bins):
+        # convert bin edges to bin edges
         for i_m, i_b, i_l in cart_prod:
             y = data[i_m,i_p,i_b,i_l]
             margs[i_m,i_p,i_b,i_l,:] = np.interp(quan, y, x)
-    # tranpose back to conventional shape (m, p, h, b, l)
+    # transpose back to conventional shape (m, p, h, b, l)
     margs = margs.transpose((0, 1, 4, 2, 3))
     store.create_dataset('conv_marginals', margs, group=dpath)
 
 
-def postprocess_run(store, std_pix=None):
+def deblend_hf_intensity(store, stack):
+    """
+    Calculate integrated and peak intensity maps from the maximum a posteriori
+    parameter values. Also produce spectral cubes that have had the hyperfine
+    splitting deblended.
+    Products include:
+        * 'peak_intensity' (t, m, b, l)
+        * 'integrated_intensity' (t, m, b, l)
+        * 'hf_deblended' (t, m, S, b, l)
+
+    Parameters
+    ----------
+    store : HdfStore
+    stack : CubeStack
+    """
+    print(':: Deblending HF structure in intensity map')
+    hdf = store.hdf
+    dpath = store.dpath
+    # dimensions (p, h)
+    bins = hdf[f'{dpath}/pdf_bins'][...]
+    nbins = bins.shape[1]
+    # dimensions (l, b, p, m)
+    pmap = hdf[f'{dpath}/nbest_MAP'][...].transpose()
+    # dimensions (l, b, m, t)
+    #   for (lon, lat, model, transition)
+    nspec = stack.n_cubes
+    intint = nans((
+            pmap.shape[0],
+            pmap.shape[1],
+            pmap.shape[3],
+            nspec,
+    ))
+    pkint = nans(intint.shape)
+    cart_prod = itertools.product(
+            range(pmap.shape[0]),
+            range(pmap.shape[1]),
+            range(pmap.shape[3]),
+    )
+    cube_shape = stack.spatial_shape
+    test_pix = cube_shape[0]//2, cube_shape[1]//2
+    (spec11, spec22), _ = stack.get_spectra(*test_pix)
+    # FIXME Remove hard-coding on ammonia
+    for i_l, i_b, i_m in cart_prod:
+        params = pmap[i_l,i_b,:,i_m].copy()  # make contiguous
+        amm11_predict(spec11, params)
+        amm22_predict(spec22, params)
+        pkint[ i_l,i_b,i_m,0] = spec11.max_spec()
+        pkint[ i_l,i_b,i_m,1] = spec22.max_spec()
+        intint[i_l,i_b,i_m,0] = spec11.sum_spec()
+        intint[i_l,i_b,i_m,1] = spec22.sum_spec()
+    # scale intensities by velocity channel width to put in K*km/s
+    intint[:,:,:,0] *= stack.cubes[0].dv
+    intint[:,:,:,1] *= stack.cubes[1].dv
+    # Desired dimensions (l, b, m, t, S) for `hfdb` below. It is created by
+    # broadcasting along the last axis (S) for the velocity bins.
+    dv_bin = abs(bins[0,1] - bins[0,0])
+    vaxis = bins[0].reshape(1, 1, 1, 1, -1)
+    sigm = np.expand_dims(pmap[:,:,4,:], (3, 4))
+    vcen = np.expand_dims(pmap[:,:,0,:], (3, 4))
+    norm_fact = dv_bin / (sigm * np.sqrt(2 * np.pi))
+    amp = intint[...,np.newaxis]
+    hfdb = norm_fact * amp * np.exp(-0.5 * ((vaxis - vcen) / sigm)**2)
+    # transpose to (t, m, b, l)
+    store.create_dataset('peak_intensity', pkint.transpose(), group=dpath)
+    store.create_dataset('integrated_intensity', intint.transpose(), group=dpath)
+    # transpose to (t, m, S, b, l)
+    store.create_dataset('hf_deblended', hfdb.transpose(), group=dpath)
+
+
+def postprocess_run(store, stack, par_bins, std_pix=None):
     aggregate_store_attributes(store)
     convolve_evidence(store, std_pix)
     aggregate_store_products(store)
-    aggregate_store_pdfs(store)
+    aggregate_store_pdfs(store, par_bins=par_bins)
     convolve_post_pdfs(store, std_pix)
-    aggregate_conv_pdfs(store)
+    quantize_conv_marginals(store)
+    deblend_hf_intensity(store, stack)
 
 
 def test_pyspeckit_profiling_compare(n=100):

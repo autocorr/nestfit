@@ -1,9 +1,9 @@
-numpy
-scipy
-pandas
-matplotlib
-h5py
 astropy
+getdist
+h5py
+matplotlib
+mayavi
+numpy
 pyspeckit
+scipy
 spectral_cube
-corner
