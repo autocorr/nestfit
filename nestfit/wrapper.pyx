@@ -172,6 +172,9 @@ cdef class AmmoniaSpectrum:
     cpdef double max_spec(self):
         return np.nanmax(self.pred)
 
+    def get_spec(self):
+        return self.pred
+
 
 cdef inline double partition_func(double trot) nogil:
     cdef:
@@ -445,53 +448,184 @@ cdef class SpacedPrior(Prior):
             utheta[ix+i] = u
 
 
+cdef class ParamPdf:
+    cdef:
+        int size, p_ix
+        double dx, xmin, xmax, eps
+        double[::1] bins, data, cdf
+
+    def __init__(self, bins, data, p_ix):
+        assert bins[1] > bins[0]
+        assert bins.shape == data.shape
+        self.dx   = bins[1] - bins[0]
+        self.bins = bins
+        self.data = data
+        self.p_ix = p_ix
+        self.size = bins.shape[0]
+        self.xmin = np.min(bins)
+        self.xmax = np.max(bins)
+        self.cdf = np.cumsum(data) / np.sum(data)
+
+    cdef void calc_cdf_from_interval(self, double x_lo, double x_hi) nogil:
+        cdef:
+            int i, i_lo, i_hi
+            double csum = 0.0
+        # If this occurs, it's almost certainly a bug, but guard against it for
+        # safety.
+        if x_lo > x_hi:
+            x_lo, x_hi = x_hi, x_lo
+        # Determine high and low indicies from the interval and guard against
+        # out of bounds values.
+        i_lo = <int>((x_lo - self.xmin) / self.dx)
+        if i_lo >= self.size:
+            i_lo = self.size - 1
+        elif i_lo < 0:
+            i_lo = 0
+        i_hi = <int>((x_hi - self.xmin) / self.dx)
+        # Guard for if x_hi - x_lo < dx and indices are the same.
+        if i_hi == i_lo:
+            i_hi = i_lo + 1
+        if i_hi > self.size:
+            i_hi = self.size
+        elif i_hi < 0:
+            i_hi = 1
+        # clear cdf outside interval
+        for i in range(0, i_lo):
+            self.cdf[i] = 0.0
+        for i in range(i_hi, self.size):
+            self.cdf[i] = 1.0
+        # recompute the CDF over the interval
+        for i in range(i_lo, i_hi):
+            csum += self.data[i]
+            self.cdf[i] = csum
+        # re-normalize the CDF
+        for i in range(i_lo, i_hi):
+            self.cdf[i] /= csum
+
+    cdef double _interp(self, double u) nogil:
+        cdef:
+            int i, i_lo, i_hi
+            double x_lo, x_hi, y_lo, y_hi, slope
+        # Inverse interpolate the unit-cube probability `u` "y"-value of the
+        # CDF onto the parameter axis or "x"-value.
+        # Normal PPF interpolation:
+        #   x -> linearly sampled probability values over (0, 1)
+        #   y -> parameter value at that quantile
+        #     => y' = m * x' + b
+        # This inverse CDF interpolation:
+        #   x -> linearly sampled parameter value over (xmin, xmax)
+        #   y -> cumulative probability at that parameter value
+        #     => x' = 1 / m * (y' - b)
+        if u < self.cdf[0]:
+            return self.xmin
+        # Walk the array to find the nearest quantile
+        for i in range(1, self.size):
+            if self.cdf[i] > u:
+                break
+        i_hi = i
+        i_lo = i_hi - 1
+        x_lo = self.bins[i_lo]
+        y_lo = self.cdf[i_lo]
+        y_hi = self.cdf[i_hi]
+        slope = (y_hi - y_lo) / self.dx
+        return 1 / slope * (u - y_lo) + x_lo
+
+    # XXX for testing
+    def py_calc_cdf_from_interval(self, double x_lo, double x_hi):
+        self.calc_cdf_from_interval(x_lo, x_hi)
+
+    def py_interp(self, double u):
+        return self._interp(u)
+
+
 cdef class ResolvedWidthPrior(Prior):
     cdef:
-        double sep_scale
-        Prior prior_cen, prior_sig
+        double scale, sep_scale, vmin, vmax
+        ParamPdf vcen_pdf
+        Prior sigm_prior
 
-    def __init__(self, prior_cen, prior_sig, scale=1):
+    def __init__(self, vcen_pdf, sigm_prior, scale=1.5):
         """
         Parameters
         ----------
-        prior_cen : Prior
-            Velocity centroid prior
-        prior_sig : Prior
+        vcen_pdf : ParamPdf
+            Velocity centroid parameter PDF
+        sigm_prior : Prior
             Velocity dispersion prior
         sep_scale : number, default 1
             Multiplicative scaling factor of the Gaussian FWHM to provide the
             minimum separation between components.
         """
-        self.prior_cen = prior_cen
-        self.prior_sig = prior_sig
+        self.vcen_pdf = vcen_pdf
+        self.sigm_prior = sigm_prior
+        self.scale = scale
         self.sep_scale = FWHM * scale
 
     cdef void interp(self, double *utheta, int n) nogil:
         cdef:
-            int i, ix_v, ix_w
-            double sep_scale = self.sep_scale
-            double v_umin, v_prev, v_next, w_prev, w_next, offset
-        ix_v = self.prior_cen.p_ix * n
-        ix_w = self.prior_sig.p_ix * n
-        # Draw first velocity centroid.
-        v_umin = utheta[ix_v]
-        v_prev = self.prior_cen._interp(v_umin)
-        utheta[ix_v*n] = v_prev
-        # Draw first velocity dispersion.
-        w_prev = self.prior_sig._interp(utheta[ix_w])
-        utheta[ix_w] = w_prev
-        # Iteratively draw the next width, determine the appropriate offset
-        # from the previous centroid to start from, and then draw next centroid
-        # over the remaining interval.
+            int i, ix_v, ix_s
+            double v_lo, v_hi, sep, sep_tot, overf_factor
+            double[10] min_seps
+        # FIXME will error if n > 10
+        ix_v = self.vcen_pdf.p_ix * n
+        ix_s = self.sigm_prior.p_ix * n
+        v_lo = self.vcen_pdf.xmin
+        v_hi = self.vcen_pdf.xmax
+        # compute widths
+        self.sigm_prior.interp(utheta, n)
+        if n == 1:
+            self.vcen_pdf.calc_cdf_from_interval(v_lo, v_hi)
+            utheta[ix_v] = self._interp(utheta[ix_v])
+            return
+        # compute minimum separations between model components
+        sep_tot = 0.0
+        min_seps[0] = 0.0
         for i in range(1, n):
-            w_next = self.prior_sig._interp(utheta[ix_w+i])
-            utheta[ix_w+i] = w_next
-            offset = sep_scale * c_sqrt(w_next * w_prev)
-            v_umin = v_umin + (1 - v_umin) * utheta[ix_v+i]
-            v_next = offset + self.prior_cen._interp(v_umin)
-            utheta[ix_v+i] = v_next
-            v_prev = v_next
-            w_prev = w_next
+            sep = self.sep_scale * c_sqrt(utheta[ix_s+i] * utheta[ix_s+i-1])
+            sep_tot += sep
+            min_seps[i] = sep
+        # shrink the separations if the separation sum is larger than the full
+        # velocity interval
+        if sep_tot > v_hi - v_lo:
+            overf_factor = (v_hi - v_lo) / sep_tot
+            sep_tot = 0.0
+            for i in range(n):
+                min_seps[i] *= overf_factor
+                sep_tot += min_seps[i]
+        # draw new centroid values based on the separations and the previously
+        # drawn velocity (i.e., iteratively draw "to the right")
+        v_hi -= sep_tot
+        for i in range(n):
+            sep = min_seps[i]  # first min_sep -> 0
+            v_lo += sep
+            v_hi += sep
+            self.vcen_pdf.calc_cdf_from_interval(v_lo, v_hi)
+            v_lo = self.vcen_pdf._interp(utheta[ix_v+i])
+            utheta[ix_v+i] = v_lo
+
+
+# XXX
+def test_rw_prior():
+    cdef:
+        double[::1] utheta
+    v_x = np.linspace(-3, 3, 100)
+    v_y = np.exp(-0.5 * v_x**2)
+    v_y /= v_y.sum()
+    ppdf = ParamPdf(v_x, v_y, 0)
+    sigm_ppf = np.linspace(0, 1, 100)
+    sigm_prior = Prior(sigm_ppf, 1)
+    rw_prior = ResolvedWidthPrior(ppdf, sigm_prior)
+    n = 3
+    for i in range(5):
+        utheta = np.random.uniform(size=2*n)
+        utheta[n:] = 0.3
+        print(f'\n----\n:: {i} before')
+        for u in utheta:
+            print(f'{u:.6f}', end=' ')
+        rw_prior.interp(&utheta[0], n)
+        print('\n:: {i} after')
+        for u in utheta:
+            print(f'{u:.6f}', end=' ')
 
 
 cdef class PriorTransformer:

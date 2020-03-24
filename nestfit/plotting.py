@@ -3,11 +3,13 @@
 Plotting module for visualizing spectra and fit results.
 """
 
+import itertools
 from pathlib import Path
 
 import numpy as np
 from scipy import special
 import matplotlib as mpl
+from matplotlib import (patheffects, animation)
 from matplotlib import pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from mayavi import mlab as mvi
@@ -44,15 +46,32 @@ NBD_CMAP = mpl.colors.LinearSegmentedColormap.from_list(
 NBD_CMAP.set_bad('0.2')
 
 
-def save_figure(filen):
+def get_amm_psk_xarrs(stack):
+    freq_dict = pyspeckit.spectrum.models.ammonia.freq_dict
+    rest_freqs = (freq_dict['oneone'], freq_dict['twotwo'])
+    varrs = [
+            pyspeckit.spectrum.units.SpectroscopicAxis(cube.xarr, unit='Hz',
+                refX=rest_freqs[i], refX_unit='Hz',
+                velocity_convention='radio')
+            for i, cube in enumerate(stack.cubes)
+    ]
+    return varrs
+
+
+def save_figure(filen, dpi=300):
     exts = ('png', 'pdf')
     for ext in exts:
         path = Path(f'{filen}.{ext}')
-        plt.savefig(str(path), dpi=300)
+        plt.savefig(str(path), dpi=dpi)
         print(f'-- {ext} saved')
     plt.close('all')
     plt.cla()
     plt.clf()
+
+
+def subplots_adjust():
+    plt.tight_layout()
+    plt.subplots_adjust(left=0.20, right=0.95, bottom=0.15, top=0.95)
 
 
 def add_scaled_colorbar(mappable):
@@ -196,98 +215,242 @@ def plot_multicomp_velo_2corr(group, outname='velo_2corr'):
     plt.close()
 
 
-def add_discrete_colorbar(ax, orientation='vertical'):
+def add_discrete_colorbar(ax, vmin=0, vmax=2, orientation='vertical'):
     t_cbar = plt.colorbar(ax)
     t_cbar.ax.clear()
-    bounds = [-0.5, 0.5, 1.5, 2.5, 3.5, 4.5]
-    ticks  = [0, 1, 2, 3, 4]
+    ticks = np.arange(vmin, vmax+1)
+    bounds = np.arange(vmin, vmax+2) - 0.5
     norm  = mpl.colors.BoundaryNorm(bounds, NBD_CMAP.N)
     cbar = mpl.colorbar.ColorbarBase(t_cbar.ax, cmap=NBD_CMAP, norm=norm,
             boundaries=bounds, ticks=ticks, spacing='uniform', orientation=orientation)
     return cbar
 
 
-def plot_agg_nbest(store, group='/aggregate/independent/nbest_image',
-        outname='nbest'):
-    data = store.hdf[group]
-    wcs = WCS(store.read_header(full=False))
-    fig, ax = plt.subplots(figsize=(4, 3.3), subplot_kw={'projection': wcs})
-    im = ax.imshow(data, vmin=0, vmax=4, cmap=NBD_CMAP)
-    cbar = add_discrete_colorbar(im)
-    cbar.set_label(r'$N_\mathrm{best}$')
-    ax.set_xlabel(r'$\mathrm{Right\ Ascension\ (J2000)}$')
-    ax.set_ylabel(r'$\mathrm{Declination\ (J2000)}$', labelpad=-0.8)
+class StorePlotter:
+    lon_label = r'$\mathrm{Right\ Ascension\ (J2000)}$'
+    lat_label = r'$\mathrm{Declination\ (J2000)}$'
+
+    def __init__(self, store, plot_dir=''):
+        """
+        Parameters
+        ----------
+        store : HdfStore
+        """
+        self.store = store
+        self.plot_dir = Path(plot_dir)
+        self.wcs = WCS(store.read_header(full=False))
+        self.ncomp_max = store.hdf.attrs['n_max_components']
+
+    def imshow_discrete(self, ax, data, vmin=0, vmax=4):
+        im = ax.imshow(data, vmin=vmin, vmax=vmax, cmap=NBD_CMAP)
+        cbar = add_discrete_colorbar(im, vmin=vmin, vmax=vmax)
+        return im, cbar
+
+    def set_lon_label(self, ax, labelpad=0):
+        ax.set_xlabel(self.lon_label)
+
+    def set_lat_label(self, ax, labelpad=-0.8):
+        ax.set_ylabel(self.lat_label, labelpad=labelpad)
+
+    def set_labels(self, ax):
+        self.set_lon_label(ax)
+        self.set_lat_label(ax)
+
+    def set_corner_label(self, ax, label, xy=(0.035, 0.045)):
+        txt = ax.annotate(label, xy=xy, xycoords='axes fraction', fontsize=10)
+        txt.set_path_effects([patheffects.withStroke(linewidth=4.5, foreground='w')])
+        return txt
+
+    def format_labels_for_grid(self, ax):
+        if ax.is_first_col():
+            self.set_lat_label(ax, labelpad=0.8)
+        else:
+            wax = ax.coords['dec']
+            wax.set_axislabel('')
+            wax.set_ticklabel_visible(False)
+        if ax.is_last_row():
+            self.set_lon_label(ax)
+        else:
+            wax = ax.coords['ra']
+            wax.set_axislabel('')
+            wax.set_ticklabel_visible(False)
+
+    def save(self, outname, dpi=300):
+        save_figure(self.plot_dir/outname, dpi=dpi)
+
+
+def plot_nbest(sp, outname='nbest'):
+    data = sp.store.hdf['/products/nbest']
+    fig, ax = plt.subplots(figsize=(4, 3.3), subplot_kw={'projection': sp.wcs})
+    im, cbar = sp.imshow_discrete(ax, data, vmin=0, vmax=2)
+    cbar.set_label(r'$N_\mathrm{comp}$')
+    sp.set_labels(ax)
+    subplots_adjust()
+    sp.save(outname)
+
+
+def plot_conv_nbest(sp, outname='conv_nbest'):
+    data = sp.store.hdf['/products/conv_nbest']
+    fig, ax = plt.subplots(figsize=(4, 3.3), subplot_kw={'projection': sp.wcs})
+    im, cbar = sp.imshow_discrete(ax, data, vmin=0, vmax=2)
+    cbar.set_label(r'$N_\mathrm{comp}$')
+    sp.set_labels(ax)
+    subplots_adjust()
+    sp.save(outname)
+
+
+def plot_deblend_peak(sp, outname='hf_deblend_peak'):
+    labels = (r'(1,1)', r'(2,2)')
+    data = sp.store.hdf['/products/peak_intensity']
+    data = np.nanmax(data, axis=1)
+    n_trans, _, _ = data.shape
+    fig, axes = plt.subplots(nrows=1, ncols=n_trans, figsize=(6.5, 3.0),
+            subplot_kw={'projection': sp.wcs})
+    vmin = np.nanmin(data)
+    vmax = np.nanmax(data) * 1.1
+    for ii, ax in enumerate(axes):
+        img = data[ii,:,:]
+        img[np.isnan(img)] = 0
+        im = ax.imshow(img, vmin=vmin, vmax=vmax, cmap=HOT_CMAP)
+        sp.set_corner_label(ax, labels[ii])
+        sp.format_labels_for_grid(ax)
+    cax = fig.add_axes([0.89, 0.20, 0.015, 0.75])
+    cbar = plt.colorbar(im, cax=cax)
+    cbar.minorticks_on()
+    cbar.set_label(r'$T_\mathrm{b,pk} \ [\mathrm{K}]$')
     plt.tight_layout()
-    plt.subplots_adjust(left=0.20, right=0.95, bottom=0.15, top=0.95)
-    save_figure(f'{outname}')
+    plt.subplots_adjust(left=0.15, right=0.875, bottom=0.20, top=0.95)
+    sp.save(outname)
 
 
-def plot_map_props(store, group='/aggregate/independent/nbest_MAP_cube',
-        outname='map_props'):
-    data = store.hdf[group][...]
+def plot_deblend_intintens(sp, outname='hf_deblend_intintens'):
+    labels = (r'(1,1)', r'(2,2)')
+    data = sp.store.hdf['/products/integrated_intensity']
+    data = np.nansum(data, axis=1)
+    n_trans, _, _ = data.shape
+    fig, axes = plt.subplots(nrows=1, ncols=n_trans, figsize=(6.5, 3.0),
+            subplot_kw={'projection': sp.wcs})
+    vmin = np.nanmin(data)
+    vmax = np.nanmax(data) * 1.1
+    for ii, ax in enumerate(axes):
+        img = data[ii,:,:]
+        im = ax.imshow(img, vmin=vmin, vmax=vmax, cmap=HOT_CMAP)
+        sp.set_corner_label(ax, labels[ii])
+        sp.format_labels_for_grid(ax)
+    cax = fig.add_axes([0.89, 0.20, 0.015, 0.75])
+    cbar = plt.colorbar(im, cax=cax)
+    cbar.minorticks_on()
+    cbar.set_label(r'$\int T_\mathrm{b,pk}\, dv \ [\mathrm{K\, km\, s^{-1}}]$')
+    plt.tight_layout()
+    plt.subplots_adjust(left=0.15, right=0.875, bottom=0.20, top=0.95)
+    sp.save(outname)
+
+
+def plot_ncomp_metrics(sp, outname='ncomp_metrics'):
+    aic  = sp.store.hdf['/products/AIC'][...]
+    aicc = sp.store.hdf['/products/AICc'][...]
+    bic  = sp.store.hdf['/products/BIC'][...]
+    lnz  = sp.store.hdf['/products/evidence'][...]
+    fig, axes = plt.subplots(nrows=2, ncols=2, figsize=(8, 7.5),
+            subplot_kw={'projection': sp.wcs})
+    all_labels = ('AIC', 'AICc', 'BIC', 'Evidence')
+    all_data = (-aic, -aicc, -bic, lnz)
+    #all_thresh = (35, 35, 35, 11)
+    all_thresh = (5, 5, 5, 11)
+    ncomp_max = sp.ncomp_max
+    vmin, vmax = 0, ncomp_max
+    for ax, data, thresh, label in zip(
+            axes.flatten(), all_data, all_thresh, all_labels):
+        nbest = np.full(data[0].shape, 0, dtype=np.int32)
+        sp.set_corner_label(ax, label)
+        for i in range(ncomp_max):
+            nbest[
+                    (nbest == i) &
+                    (data[i+1] - data[i] > thresh)
+            ] += 1
+            im = ax.imshow(nbest, vmin=vmin, vmax=vmax, cmap=NBD_CMAP)
+            sp.format_labels_for_grid(ax)
+    plt.tight_layout()
+    plt.subplots_adjust(left=0.15, right=0.95, bottom=0.10, top=0.95)
+    sp.save(outname)
+
+
+def plot_map_props(sp, outname='map_props'):
+    data = sp.store.hdf['/products/nbest_MAP'][...]
     n_mod, n_params, _, _ = data.shape
-    wcs = WCS(store.read_header(full=False))
-    # iterate through properties
+    # create plots for each model parameter
     for ii in range(n_params):
-        fig, axes = plt.subplots(nrows=1, ncols=n_mod, figsize=(8, 2.8),
-                subplot_kw={'projection': wcs})
+        fig, axes = plt.subplots(nrows=1, ncols=n_mod, figsize=(6.5, 3.0),
+                subplot_kw={'projection': sp.wcs})
         vmin = np.nanmin(data[:,ii,:,:])
         vmax = np.nanmax(data[:,ii,:,:])
         for jj, ax in enumerate(axes):
             img = data[jj,ii,:,:]
             im = ax.imshow(img, vmin=vmin, vmax=vmax, cmap=CLR_CMAP)
-            if not ax.is_first_col():
-                ax.tick_params(axis='y', labelleft=False)
-        cax = fig.add_axes([0.89, 0.20, 0.015, 0.70])
+            sp.format_labels_for_grid(ax)
+        cax = fig.add_axes([0.89, 0.20, 0.015, 0.75])
         cbar = plt.colorbar(im, cax=cax)
         cbar.minorticks_on()
         cbar.set_label(TEX_LABELS[ii])
-        axes[0].set_xlabel(r'$\mathrm{Right\ Ascension\ (J2000)}$')
-        axes[0].set_ylabel(r'$\mathrm{Declination\ (J2000)}$', labelpad=-0.8)
         plt.tight_layout()
-        plt.subplots_adjust(left=0.10, right=0.875, bottom=0.15, top=0.95)
-        save_figure(f'{outname}_par{ii}')
+        plt.subplots_adjust(left=0.15, right=0.875, bottom=0.20, top=0.95)
+        sp.save(f'{outname}_par{ii}')
 
 
-def plot_3d_volume(store, outname='volume_field_contour'):
-    histdata = store.hdf['/aggregate/independent/post_hists'][...]
-    vals = histdata[0,...]
-    vmin, vmax = vals.min(), vals.max()
-    obj = mvi.contour3d(vals, colormap='inferno', transparent=True)
-    mvi.savefig(f'plots/{outname}.pdf')
+def plot_conv_quan_props(sp, quan_ix=4, outname='conv_props'):
+    data = sp.store.hdf['/products/conv_marginals'][:,:,quan_ix,:,:]
+    n_mod, n_params, _, _ = data.shape
+    # create plots for each model parameter
+    for ii in range(n_params):
+        fig, axes = plt.subplots(nrows=1, ncols=n_mod, figsize=(6.5, 3.0),
+                subplot_kw={'projection': sp.wcs})
+        vmin = np.nanmin(data[:,ii,:,:])
+        vmax = np.nanmax(data[:,ii,:,:])
+        for jj, ax in enumerate(axes):
+            img = data[jj,ii,:,:]
+            im = ax.imshow(img, vmin=vmin, vmax=vmax, cmap=CLR_CMAP)
+            sp.format_labels_for_grid(ax)
+        cax = fig.add_axes([0.89, 0.20, 0.015, 0.75])
+        cbar = plt.colorbar(im, cax=cax)
+        cbar.minorticks_on()
+        cbar.set_label(TEX_LABELS[ii])
+        plt.tight_layout()
+        plt.subplots_adjust(left=0.15, right=0.875, bottom=0.20, top=0.95)
+        sp.save(f'{outname}_quan{quan_ix}_par{ii}')
+
+
+def plot_3d_volume(sp, outname='volume_field_contour'):
+    db_data = sp.store.hdf['/products/hf_deblended'][...]
+    data = np.nansum(db_data, axis=1)[0,...]
+    vmin, vmax = np.nanmin(data), np.nanmax(data)
+    obj = mvi.contour3d(data, colormap='inferno', transparent=True, vmin=vmin,
+            vmax=vmax)
+    filen = str(sp.plot_dir/f'{outname}.pdf')
+    mvi.savefig(filen)
     mvi.clf()
 
 
-def plot_specfit(store, stack, pix, n_model=1, outname='specfit'):
+def plot_amm_specfit(sp, stack, pix, n_model=1, outname='specfit'):
     lon_pix, lat_pix = pix
-    group = store.hdf[f'/pix/{lon_pix}/{lat_pix}/{n_model}']
+    group = sp.store.hdf[f'/pix/{lon_pix}/{lat_pix}/{n_model}']
     params = group['map_params'][...]
-    spectra = stack.get_arrays(*pix)
-    freq_dict = pyspeckit.spectrum.models.ammonia.freq_dict
-    rest_freqs = (freq_dict['oneone'], freq_dict['twotwo'])
-    xarrs = [
-            pyspeckit.spectrum.units.SpectroscopicAxis(cube.xarr, unit='Hz',
-                refX=rest_freqs[i], refX_unit='Hz',
-                velocity_convention='radio')
-            for i, cube in enumerate(stack.cubes)
-    ]
-    synspectra = [SyntheticSpectrum(x, params) for x in xarrs]
+    obs_spec = stack.get_arrays(*pix)
+    xarrs = get_amm_psk_xarrs(stack)
+    syn_spec = [SyntheticSpectrum(x, params) for x in xarrs]
     fig = plt.figure(figsize=(4, 5))
     ax0 = plt.subplot2grid((3, 1), (0, 0), rowspan=2)
     ax1 = plt.subplot2grid((3, 1), (2, 0))
     axes = (ax0, ax1)
-    #fig, axes = plt.subplots(nrows=len(spectra), ncols=1,
-    #        sharex=True, sharey=True, figsize=(4, 5))
-    for data, xarr, synspec, ax in zip(spectra, xarrs, synspectra, axes):
-        varr = synspec.varr
+    for data, xarr, model, ax in zip(obs_spec, xarrs, syn_spec, axes):
+        varr = model.varr
         ax.fill_between(varr, data, np.zeros_like(data), color='yellow',
                 edgecolor='none', alpha=0.5)
         ax.plot(varr, data, 'k-', linewidth=0.7, drawstyle='steps-pre')
-        ax.plot(varr, synspec.components.T, '-', color='magenta', linewidth=1.0, alpha=0.5)
-        ax.plot(varr, synspec.sum_spec, '-', color='red', linewidth=1.0)
+        ax.plot(varr, model.components.T, '-', color='magenta', linewidth=1.0, alpha=0.5)
+        ax.plot(varr, model.sum_spec, '-', color='red', linewidth=1.0)
         ax.set_xlim(varr.value.min(), varr.value.max())
-    ymin = spectra[0].min() * 1.1
-    ymax = spectra[0].max() * 1.1
+    ymin = obs_spec[0].min() * 1.1
+    ymax = obs_spec[0].max() * 1.1
     axes[0].set_ylim(ymin, ymax)
     axes[1].set_ylim(ymin*0.4-0.5, ymax*0.4-0.5)
     axes[1].set_xlabel(r'$v_\mathrm{lsr} \ [\mathrm{km\, s^{-1}}]$')
@@ -295,7 +458,82 @@ def plot_specfit(store, stack, pix, n_model=1, outname='specfit'):
     axes[0].annotate(r'$\mathrm{NH_3}\, (1,1)$', (0.03, 0.91), xycoords='axes fraction')
     axes[1].annotate(r'$\mathrm{NH_3}\, (2,2)$', (0.03, 0.80), xycoords='axes fraction')
     plt.tight_layout()
-    save_figure(f'{outname}_{lon_pix}_{lat_pix}_{n_model}')
+    sp.save(f'{outname}_{lon_pix}_{lat_pix}_{n_model}')
+
+
+def plot_amm_specfit_nsrun(sp, stack, pix, n_model=1, n_draw=50,
+        outname='nsrun', interval=500):
+    lon_pix, lat_pix = pix
+    group = sp.store.hdf[f'/pix/{lon_pix}/{lat_pix}/{n_model}']
+    post = group['posteriors'][...]
+    n_samples = post.shape[0]
+    assert n_draw < n_samples
+    obs_spec = stack.get_arrays(*pix)
+    xarrs = get_amm_psk_xarrs(stack)
+    def get_spec_set(i_lo, i_hi):
+        return [[
+                SyntheticSpectrum(x, p)
+                for p in post[i_lo:i_hi]
+            ]
+            for x in xarrs
+        ]
+    def get_reshaped_spec(models, length):
+        return np.array([
+                s.components for s in models
+        ]).T.reshape(-1, length*n_model)
+    syn_spec_sets = get_spec_set(0, n_draw)
+    fig = plt.figure(figsize=(4, 5))
+    ax0 = plt.subplot2grid((3, 1), (0, 0), rowspan=2)
+    ax1 = plt.subplot2grid((3, 1), (2, 0))
+    axes = (ax0, ax1)
+    trans_lines = []
+    for data, xarr, models, ax in zip(obs_spec, xarrs, syn_spec_sets, axes):
+        varr = models[0].varr
+        ax.fill_between(varr, data, np.zeros_like(data), color='yellow',
+                edgecolor='none', alpha=0.5)
+        ax.plot(varr, data, 'k-', linewidth=0.7, drawstyle='steps-pre')
+        mod_spec = get_reshaped_spec(models, n_draw)
+        lines = ax.plot(varr, mod_spec, '-', color='red',
+                linewidth=0.5, alpha=0.5)
+        trans_lines.append(lines)
+        ax.set_xlim(varr.value.min(), varr.value.max())
+    ymin = obs_spec[0].min() * 1.1
+    ymax = obs_spec[0].max() * 1.1
+    axes[0].set_ylim(ymin, ymax)
+    axes[1].set_ylim(ymin*0.4-0.5, ymax*0.4-0.5)
+    axes[1].set_xlabel(r'$v_\mathrm{lsr} \ [\mathrm{km\, s^{-1}}]$')
+    axes[1].set_ylabel(r'$T_\mathrm{mb} \ [\mathrm{K}]$')
+    axes[0].annotate(r'$\mathrm{NH_3}\, (1,1)$', (0.03, 0.91), xycoords='axes fraction')
+    axes[1].annotate(r'$\mathrm{NH_3}\, (2,2)$', (0.03, 0.80), xycoords='axes fraction')
+    plt.tight_layout()
+    def init():
+        for lines, data in zip(trans_lines, obs_spec):
+            nans = np.full(data.shape, np.nan)
+            for line in lines:
+                line.set_ydata(nans)
+        return lines
+    def animate(n):
+        i_lo = n * n_draw
+        if n_draw > n_samples - i_lo:
+            n_anim = n_samples % n_draw
+        else:
+            n_anim = n_draw
+        i_hi = i_lo + n_anim
+        syn_spec_sets = get_spec_set(i_lo, i_hi)
+        for models, line_set in zip(syn_spec_sets, trans_lines):
+            mod_spec = get_reshaped_spec(models, n_anim)
+            for data, line in zip(mod_spec.T, line_set):
+                line.set_ydata(data)
+        lines_flat = list(itertools.chain.from_iterable(trans_lines))
+        return lines_flat
+    n_extra = int(n_samples % n_draw == 0)
+    n_frames = post.shape[0] // n_draw + n_extra
+    ani = animation.FuncAnimation(
+            fig, animate, init_func=init, frames=n_frames,
+            interval=interval, blit=True,
+    )
+    out_path = sp.plot_dir / f'{outname}_{lon_pix}_{lat_pix}_{n_model}.mp4'
+    ani.save(str(out_path), writer='ffmpeg', dpi=300)
 
 
 def test_wrapped_amm_precision():

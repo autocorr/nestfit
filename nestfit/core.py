@@ -56,25 +56,25 @@ def get_irdc_priors(size=500, vsys=0.0):
     # evaluates to 0.999045 .
     epsilon = 1e-13
     x = np.linspace(0, 1-epsilon, size)
-    dist_voff = sp.stats.beta( 5.0,  5.0)
-    dist_vdep = sp.stats.beta( 1.5,  3.5)
-    dist_trot = sp.stats.gamma(4.4, scale=0.070)
-    dist_tex  = sp.stats.beta( 1.0,  2.5)
-    dist_ntot = sp.stats.beta(16.0, 14.0)
-    dist_sigm = sp.stats.gamma(1.5, loc=0.03, scale=0.2)
+    dist_voff = sp.stats.beta( 5.0, 5.0)
+    dist_vdep = sp.stats.beta( 1.5, 3.5)
+    dist_trot = sp.stats.beta( 3.0, 6.7)
+    dist_tex  = sp.stats.beta( 1.0, 2.5)
+    dist_ntot = sp.stats.beta(10.0, 8.5)
+    dist_sigm = sp.stats.beta( 1.5, 5.0)
     # interpolation values, transformed to the intervals:
-    # 0 voff [-4.00,  4.0] km/s  (centered on vsys)
-    #   vdep [    D,D+3.0] km/s  (with offset "D")
-    # 1 trot [ 7.00, 30.0] K
-    # 2 tex  [ 2.74, 12.0] K
-    # 3 ntot [12.00, 17.0] log(cm^-2)
-    # 4 sigm [ 0.00,  2.0] km/s
+    # 0 voff [-4.00,   4.0] km/s  (centered on vsys)
+    #   vdep [    D, D+3.0] km/s  (with offset "D")
+    # 1 trot [ 7.00,  30.0] K
+    # 2 tex  [ 2.80,  12.0] K
+    # 3 ntot [12.50,  16.5] log(cm^-2)
+    # 4 sigm [    C, C+2.0] km/s  (with min sigma "C")
     y_voff =  8.00 * dist_voff.ppf(x) -  4.00 + vsys
     y_vdep =  3.00 * dist_vdep.ppf(x) +  0.70
     y_trot = 23.00 * dist_trot.ppf(x) +  7.00
-    y_tex  =  9.26 * dist_tex.ppf(x)  +  2.74
-    y_ntot =  5.00 * dist_ntot.ppf(x) + 12.00
-    y_sigm =  2.00 * dist_sigm.ppf(x)
+    y_tex  =  9.26 * dist_tex.ppf(x)  +  2.80
+    y_ntot =  4.00 * dist_ntot.ppf(x) + 12.50
+    y_sigm =  2.00 * dist_sigm.ppf(x) +  0.067
     priors = [
             #OrderedPrior(y_voff, 0),
             #SpacedPrior(Prior(y_voff, 0), Prior(y_vdep, 0)),
@@ -264,7 +264,7 @@ def check_ext(store_name, ext='hdf'):
 class HdfStore:
     linked_table = Path('table.hdf')
     chunk_prefix = 'chunk'
-    dpath = '/aggregate'
+    dpath = '/products'
 
     def __init__(self, store_name, nchunks=1):
         """
@@ -496,7 +496,7 @@ def test_fit_cube(store_name='run/test_cube_multin'):
     fitter.fit_cube(store_name=store_name, nproc=8)
 
 
-def aggregate_store_attributes(store):
+def aggregate_run_attributes(store):
     """
     Aggregate the attribute values into a dense array from the individual
     per-pixel Nested Sampling runs. Products include:
@@ -605,7 +605,7 @@ def convolve_evidence(store, std_pix):
     store.create_dataset('conv_evidence', cdata, group=dpath)
 
 
-def aggregate_store_products(store):
+def aggregate_run_products(store):
     """
     Aggregate the results from the individual per-pixel Nested Sampling runs
     into dense arrays of the product values. Products include:
@@ -663,7 +663,7 @@ def aggregate_store_products(store):
     store.create_dataset('nbest_marginals', pardata.transpose(), group=dpath)
 
 
-def aggregate_store_pdfs(store, par_bins=None):
+def aggregate_run_pdfs(store, par_bins=None):
     """
     Aggregate the results from the individual per-pixel set of posterior
     samples into one-dimensional marginalized PDFs of the parameter posteriors.
@@ -771,7 +771,7 @@ def quantize_conv_marginals(store):
     """
     Calculate weighted quantiles of convolved posterior marginal distributions.
     Products include:
-        * 'conv_marginals' (m, p, h, b, l)
+        * 'conv_marginals' (m, p, M, b, l)
 
     Parameters
     ----------
@@ -793,14 +793,16 @@ def quantize_conv_marginals(store):
     margs_shape = list(data.shape)
     margs_shape[-1] = len(quan)
     margs = nans(margs_shape)
-    cart_prod = itertools.product(
-            range(data.shape[0]),
-            range(data.shape[2]),
-            range(data.shape[3]),
-    )
+    # requires creating a new iterator each loop otherwise will run out
+    def make_cart_prod():
+        return itertools.product(
+                range(data.shape[0]),
+                range(data.shape[2]),
+                range(data.shape[3]),
+        )
     for i_p, x in enumerate(bins):
         # convert bin edges to bin edges
-        for i_m, i_b, i_l in cart_prod:
+        for i_m, i_b, i_l in make_cart_prod():
             y = data[i_m,i_p,i_b,i_l]
             margs[i_m,i_p,i_b,i_l,:] = np.interp(quan, y, x)
     # transpose back to conventional shape (m, p, h, b, l)
@@ -878,10 +880,10 @@ def deblend_hf_intensity(store, stack):
 
 
 def postprocess_run(store, stack, par_bins, std_pix=None):
-    aggregate_store_attributes(store)
+    aggregate_run_attributes(store)
     convolve_evidence(store, std_pix)
-    aggregate_store_products(store)
-    aggregate_store_pdfs(store, par_bins=par_bins)
+    aggregate_run_products(store)
+    aggregate_run_pdfs(store, par_bins=par_bins)
     convolve_post_pdfs(store, std_pix)
     quantize_conv_marginals(store)
     deblend_hf_intensity(store, stack)
