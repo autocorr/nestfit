@@ -1,6 +1,7 @@
 all:
-	python setup.py build_ext --inplace
+	python3 setup.py build_ext --inplace
 
-clean:
+.PHONY : clean
+clean : setup.py
 	-rm -rf build/
-	-rm nestfit/wrapper.c nestfit/wrapper.html nestfit/wrapped*.so
+	python3 setup.py clean --all

@@ -9,7 +9,7 @@ import pyspeckit
 from astropy import units as u
 from astropy.io import fits
 
-from .wrapped import AmmoniaSpectrum
+from nestfit.models.ammonia import AmmoniaSpectrum
 
 
 FAKE_KWDS = {
@@ -43,7 +43,7 @@ FAKE_KWDS = {
 class SyntheticSpectrum:
     model_name = 'ammonia'
 
-    def __init__(self, xarr, params, noise=0.03, vsys=0, set_seed=False):
+    def __init__(self, xarr, params, noise=0.03, vsys=0, trans_id=1, set_seed=False):
         """
         Construct a mixture of ammonia model spectra given parameters:
             voff : centroid velocity offset from zero
@@ -51,6 +51,7 @@ class SyntheticSpectrum:
             tex  : excitation temperature
             ntot : para-ammonia column density
             sigm : velocity dispersion or gaussian sigma
+            orth : ortho-species fraction of total
 
         Parameters
         ----------
@@ -61,6 +62,8 @@ class SyntheticSpectrum:
         noise : number, default 0.03
             Standard deviation of the baseline noise
         vsys : number, default 0
+        trans_id : number, default 1
+            Transition ID
         set_seed : bool, default=False
             If `True` will use a default seed of 5 for the np.random module.
         """
@@ -78,8 +81,9 @@ class SyntheticSpectrum:
         self.params = params
         self.noise = noise
         self.vsys = vsys
+        self.trans_id = trans_id
         self.size  = xarr.shape[0]
-        self.ncomp = params.shape[0] // 5
+        self.ncomp = params.shape[0] // 6
         self.components = self.calc_profiles()
         self.sum_spec = self.components.sum(axis=0)
         self.noise_spec = self.calc_noise()
@@ -95,7 +99,7 @@ class SyntheticSpectrum:
                     tex   =self.params[2*n+i],
                     ntot  =self.params[3*n+i],
                     width =self.params[4*n+i],
-                    fortho=0.0,
+                    fortho=self.params[5*n+i],
                 )
                 for i in range(self.ncomp)
         ])
@@ -113,35 +117,7 @@ class SyntheticSpectrum:
     def to_ammspec(self):
         xarr = self.xarr.value.copy()
         data = self.sampled_spec
-        return AmmoniaSpectrum(xarr, data, self.noise)
-
-
-def get_test_spectra():
-    freqs = pyspeckit.spectrum.models.ammonia_constants.freq_dict.copy()
-    Axis = pyspeckit.spectrum.units.SpectroscopicAxis
-    vchan = 0.158  # km/s
-    vaxis = np.arange(-30, 30, vchan) * u.km / u.s
-    xa11 = Axis(vaxis, velocity_convention='radio', refX=freqs['oneone']).as_unit('Hz')
-    xa22 = Axis(vaxis, velocity_convention='radio', refX=freqs['twotwo']).as_unit('Hz')
-    params = np.array([
-        -1.0,  1.5,  # voff
-        10.0, 15.0,  # trot
-         4.0,  6.0,  # tex
-        14.5, 15.0,  # ntot
-         0.3,  0.6,  # sigm
-    ])
-    #params = np.array([
-    #    -1.0,  1.0,  # voff
-    #    12.0, 12.0,  # trot
-    #     6.0,  6.0,  # tex
-    #    14.5, 14.6,  # ntot
-    #     0.3,  0.3,  # sigm
-    #])
-    spectra = [
-            SyntheticSpectrum(xarr, params, noise=0.2, set_seed=True)
-            for xarr in (xa11, xa22)
-    ]
-    return spectra
+        return AmmoniaSpectrum(xarr, data, self.noise, self.trans_id)
 
 
 def make_fake_header(data, xarr):
@@ -163,7 +139,7 @@ def add_noise_to_cube(data, std):
 class ParamSampler:
     # FIXME change parameter distributions to match Keown & Chen
     def __init__(self, vsep=(0.16, 3), trot=(3, 30), tex=(2.8, 12),
-            ntot=(13, 16), sigm=(0.15, 2)):
+            ntot=(13, 16), sigm=(0.15, 2), orth=(0, 0)):
         """
         Parameters
         ----------
@@ -175,6 +151,7 @@ class ParamSampler:
         self.tex  = tex
         self.ntot = ntot
         self.sigm = sigm
+        self.orth = orth
 
     def draw(self):
         vsep = np.random.uniform(*self.vsep)
@@ -185,6 +162,7 @@ class ParamSampler:
                 np.random.uniform(*self.tex,  size=2),
                 np.random.uniform(*self.ntot, size=2),
                 np.random.uniform(*self.sigm, size=2),
+                np.random.uniform(*self.orth, size=2),
         ])
 
 
@@ -198,7 +176,7 @@ def make_indep_synth_cube():
     xarr22 = spectra[1].xarr
     data11 = np.empty(np.product(im_shape) * xarr11.shape[0]).reshape(-1, xarr11.shape[0])
     data22 = np.empty(np.product(im_shape) * xarr22.shape[0]).reshape(-1, xarr22.shape[0])
-    pcube  = np.empty(np.product(im_shape) * 10).reshape(-1, 10)  # p=5, n=2
+    pcube  = np.empty(np.product(im_shape) * 12).reshape(-1, 12)  # p=6, n=2
     pkcube = np.empty(np.product(im_shape) * 2).reshape(-1, 2)
     # create synthetic cubes from parameters without noise
     for ii in range(np.product(im_shape)):
@@ -230,5 +208,39 @@ def make_indep_synth_cube():
         # write fits cube
         hdu11.writeto(f'{outdir}/syn_11_rms{std:.3f}.fits', overwrite=True)
         hdu22.writeto(f'{outdir}/syn_22_rms{std:.3f}.fits', overwrite=True)
+
+
+##############################################################################
+#                                 Tests
+##############################################################################
+
+def get_test_spectra():
+    freqs = pyspeckit.spectrum.models.ammonia_constants.freq_dict.copy()
+    Axis = pyspeckit.spectrum.units.SpectroscopicAxis
+    vchan = 0.158  # km/s
+    vaxis = np.arange(-30, 30, vchan) * u.km / u.s
+    xa11 = Axis(vaxis, velocity_convention='radio', refX=freqs['oneone']).as_unit('Hz')
+    xa22 = Axis(vaxis, velocity_convention='radio', refX=freqs['twotwo']).as_unit('Hz')
+    params = np.array([
+        -1.0,  1.5,  # voff
+        10.0, 15.0,  # trot
+         4.0,  6.0,  # tex
+        14.5, 15.0,  # ntot
+         0.3,  0.6,  # sigm
+         0.0,  0.0,  # orth
+    ])
+    #params = np.array([
+    #    -1.0,  1.0,  # voff
+    #    12.0, 12.0,  # trot
+    #     6.0,  6.0,  # tex
+    #    14.5, 14.6,  # ntot
+    #     0.3,  0.3,  # sigm
+    #     0.0,  0.0,  # orth
+    #])
+    spectra = [
+            SyntheticSpectrum(xarr, params, noise=0.2, trans_id=i+1, set_seed=True)
+            for i, xarr in enumerate((xa11, xa22))
+    ]
+    return spectra
 
 

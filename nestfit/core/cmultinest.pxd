@@ -1,5 +1,6 @@
 #cython: language_level=3
 
+
 cdef extern from 'multinest.h':
     void run(
             bint IS,
@@ -30,3 +31,5 @@ cdef extern from 'multinest.h':
                 double *, double *, double *, void *),
             void *context,
     )
+
+

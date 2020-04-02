@@ -25,11 +25,13 @@ from astropy import convolution
 from astropy import units as u
 from astropy.io import fits
 
-from .synth_spectra import get_test_spectra
-from .wrapped import (
-        amm11_predict, amm22_predict,
-        Prior, OrderedPrior, SpacedPrior, ResolvedWidthPrior, PriorTransformer,
-        AmmoniaSpectrum, AmmoniaRunner, Dumper, run_multinest,
+from nestfit.synth_spectra import get_test_spectra
+from nestfit.core.core import (
+        Prior, ConstantPrior, OrderedPrior, SpacedPrior, ResolvedWidthPrior,
+        Distribution, PriorTransformer, Dumper, run_multinest,
+)
+from nestfit.models.ammonia import (
+        amm_predict, AmmoniaSpectrum, AmmoniaRunner,
 )
 
 
@@ -50,58 +52,50 @@ def get_irdc_priors(size=500, vsys=0.0):
     vsys : float
         Systemic velocity to center prior distribution about
     """
-    # prior distributions
-    # NOTE gamma distributions evaluate to inf at 1, so only evaluate
-    # functions up to 1-epsilon. For the beta distribution ppf, 1-epsilon
-    # evaluates to 0.999045 .
-    epsilon = 1e-13
-    x = np.linspace(0, 1-epsilon, size)
-    dist_voff = sp.stats.beta( 5.0, 5.0)
-    dist_vdep = sp.stats.beta( 1.5, 3.5)
-    dist_trot = sp.stats.beta( 3.0, 6.7)
-    dist_tex  = sp.stats.beta( 1.0, 2.5)
-    dist_ntot = sp.stats.beta(10.0, 8.5)
-    dist_sigm = sp.stats.beta( 1.5, 5.0)
-    # interpolation values, transformed to the intervals:
+    u = np.linspace(0, 1, size)
+    # prior distribution x axes
     # 0 voff [-4.00,   4.0] km/s  (centered on vsys)
     #   vdep [    D, D+3.0] km/s  (with offset "D")
     # 1 trot [ 7.00,  30.0] K
     # 2 tex  [ 2.80,  12.0] K
     # 3 ntot [12.50,  16.5] log(cm^-2)
     # 4 sigm [    C, C+2.0] km/s  (with min sigma "C")
-    y_voff =  8.00 * dist_voff.ppf(x) -  4.00 + vsys
-    y_vdep =  3.00 * dist_vdep.ppf(x) +  0.70
-    y_trot = 23.00 * dist_trot.ppf(x) +  7.00
-    y_tex  =  9.26 * dist_tex.ppf(x)  +  2.80
-    y_ntot =  4.00 * dist_ntot.ppf(x) + 12.50
-    y_sigm =  2.00 * dist_sigm.ppf(x) +  0.067
-    priors = [
-            #OrderedPrior(y_voff, 0),
-            #SpacedPrior(Prior(y_voff, 0), Prior(y_vdep, 0)),
-            #Prior(y_trot, 1),
-            #Prior(y_tex,  2),
-            #Prior(y_ntot, 3),
-            #Prior(y_sigm, 4),
-            ResolvedWidthPrior(Prior(y_voff, 0), Prior(y_sigm, 4), scale=1.5),
-            Prior(y_trot, 1),
-            Prior(y_tex,  2),
-            Prior(y_ntot, 3),
-    ]
+    x_voff =  8.00 * u -  4.00 + vsys
+    x_vdep =  3.00 * u +  0.70
+    x_trot = 23.00 * u +  7.00
+    x_tex  =  9.26 * u +  2.80
+    x_ntot =  4.00 * u + 12.50
+    x_sigm =  2.00 * u +  0.067
+    # prior PDFs values
+    f_voff = sp.stats.beta( 5.0, 5.0).pdf(u)
+    f_vdep = sp.stats.beta( 1.5, 3.5).pdf(u)
+    f_trot = sp.stats.beta( 3.0, 6.7).pdf(u)
+    f_tex  = sp.stats.beta( 1.0, 2.5).pdf(u)
+    f_ntot = sp.stats.beta(10.0, 8.5).pdf(u)
+    f_sigm = sp.stats.beta( 1.5, 5.0).pdf(u)
+    # and distribution instances
+    d_voff = Distribution(x_voff, f_voff)
+    d_vdep = Distribution(x_vdep, f_vdep)
+    d_trot = Distribution(x_trot, f_trot)
+    d_tex  = Distribution(x_tex,  f_tex)
+    d_ntot = Distribution(x_ntot, f_ntot)
+    d_sigm = Distribution(x_sigm, f_sigm)
+    # interpolation values, transformed to the intervals:
+    priors = np.array([
+            #OrderedPrior(d_voff, 0),
+            #SpacedPrior(Prior(d_voff, 0), Prior(d_vdep, 0)),
+            ResolvedWidthPrior(
+                Prior(d_voff, 0),
+                Prior(d_sigm, 4),
+                scale=1.5,
+            ),
+            Prior(d_trot, 1),
+            Prior(d_tex,  2),
+            Prior(d_ntot, 3),
+            #Prior(d_sigm, 4),
+            ConstantPrior(0, 5),
+    ])
     return PriorTransformer(priors)
-
-
-def test_nested(ncomp=2, prefix='test'):
-    synspec = get_test_spectra()
-    spectra = [syn.to_ammspec() for syn in synspec]
-    utrans = get_irdc_priors(vsys=0)
-    with h5py.File('test.hdf', 'a', driver='core') as hdf:
-        group = hdf.require_group(f'{prefix}/{ncomp}')
-        dumper = Dumper(group, no_dump=True)
-        runner = AmmoniaRunner(spectra, utrans, ncomp)
-        for _ in range(20):
-            run_multinest(runner, dumper, nlive=60, seed=5, tol=1.0, efr=0.3,
-                    updInt=2000)
-    return synspec, spectra, runner
 
 
 class NoiseMap:
@@ -143,11 +137,12 @@ class NoiseMapUniform:
 
 
 class DataCube:
-    def __init__(self, cube, noise_map):
+    def __init__(self, cube, noise_map, trans_id=None):
         if isinstance(noise_map, (float, int)):
             self.noise_map = NoiseMapUniform(noise_map)
         else:
             self.noise_map = noise_map
+        self.trans_id = trans_id
         self._header = cube.header.copy()
         self.dv = self.get_chan_width(cube)
         self.data, self.xarr = self.data_from_cube(cube)
@@ -203,16 +198,11 @@ class DataCube:
         data = cube._data.transpose().copy()
         return data, axis
 
-    def get_array(self, i_lon, i_lat):
+    def get_spec_data(self, i_lon, i_lat):
         arr = self.data[i_lon,i_lat,:]  # axes reversed from typical cube
-        return arr
-
-    def get_spectra(self, i_lon, i_lat):
-        spec = self.get_array(i_lon, i_lat)
-        has_nans = np.isnan(spec).any()
+        has_nans = np.isnan(arr).any()
         noise = self.noise_map.get_noise(i_lon, i_lat)
-        amm_spec = AmmoniaSpectrum(self.xarr, spec, noise)
-        return amm_spec, has_nans
+        return self.xarr, arr, noise, self.trans_id, has_nans
 
 
 class CubeStack:
@@ -244,14 +234,14 @@ class CubeStack:
             arrays.append(arr)
         return arrays
 
-    def get_spectra(self, i_lon, i_lat):
-        spectra = []
+    def get_spec_data(self, i_lon, i_lat):
+        all_spec_data = []
         any_nans = False
         for dcube in self.cubes:
-            spec, has_nans = dcube.get_spectra(i_lon, i_lat)
-            spectra.append(spec)
+            *spec_data, has_nans = dcube.get_spec_data(i_lon, i_lat)
+            all_spec_data.append(spec_data)
             any_nans |= has_nans
-        return spectra, any_nans
+        return all_spec_data, any_nans
 
 
 def check_ext(store_name, ext='hdf'):
@@ -383,40 +373,44 @@ class CubeFitter:
             'updInt': 2000,
     }
 
-    def __init__(self, stack, utrans, lnZ_thresh=11, ncomp_max=2,
+    def __init__(self, stack, utrans, runner_cls, runner_kwargs=None, lnZ_thresh=11, ncomp_max=2,
             mn_kwargs=None):
         self.stack = stack
         self.utrans = utrans
+        self.runner_cls = runner_cls
+        self.runner_kwargs = {} if runner_kwargs is None else runner_kwargs
         self.lnZ_thresh = lnZ_thresh
         self.ncomp_max = ncomp_max
-        self.mn_kwargs = mn_kwargs if mn_kwargs is not None else self.mn_default_kwargs
+        self.mn_kwargs = self.mn_default_kwargs if mn_kwargs is None else mn_kwargs
 
     def fit(self, *args):
         (all_lon, all_lat), chunk_path = args
         # NOTE for HDF5 files to be written correctly, they must be opened
         # *after* the `multiprocessing.Process` has been forked from the main
         # Python process, and it inherits the HDF5 libraries state.
-        # See "Python and HDF5" pg. 116
+        #   See "Python and HDF5" pg. 116
         hdf = h5py.File(chunk_path, 'a')
         for (i_lon, i_lat) in zip(all_lon, all_lat):
-            spectra, has_nans = self.stack.get_spectra(i_lon, i_lat)
+            spec_data, has_nans = self.stack.get_spectra(i_lon, i_lat)
             if has_nans:
                 # FIXME replace with logging framework
                 print(f'-- ({i_lon}, {i_lat}) SKIP: has NaN values')
                 continue
             group_name = f'/pix/{i_lon}/{i_lat}'
             group = hdf.require_group(group_name)
-            ncomp = 1
-            nbest = 0
-            old_lnZ = AmmoniaRunner(spectra, self.utrans, 1).null_lnZ
-            assert np.isfinite(old_lnZ)
             # Iteratively fit additional components until they no longer
             # produce a significant increase in the evidence.
+            ncomp = 1
+            nbest = 0
             while ncomp <= self.ncomp_max:
                 print(f'-- ({i_lon}, {i_lat}) -> N = {ncomp}')
                 sub_group = group.create_group(f'{ncomp}')
                 dumper = Dumper(sub_group)
-                runner = AmmoniaRunner(spectra, self.utrans, ncomp)
+                runner = self.runner_cls.from_data(spec_data, self.utrans,
+                        ncomp=ncomp, **self.runner_kwargs)
+                if ncomp == 1:
+                    old_lnZ = runner.null_lnZ
+                    assert np.isfinite(old_lnZ)
                 # FIXME needs tuned/specific kwargs for a given ncomp
                 run_multinest(runner, dumper, **self.mn_kwargs)
                 assert np.isfinite(runner.run_lnZ)
@@ -468,32 +462,6 @@ def get_multiproc_indices(shape, nproc):
             for i in range(nproc)
     ]
     return indices
-
-
-def get_test_cubestack(full=False):
-    # NOTE hack in indexing because last channel is all NaN's
-    cube11 = spectral_cube.SpectralCube.read('data/test_cube_11.fits')[:-1]
-    cube22 = spectral_cube.SpectralCube.read('data/test_cube_22.fits')[:-1]
-    if not full:
-        cube11 = cube11[:,155:195,155:195]
-        cube22 = cube22[:,155:195,155:195]
-    noise_map = NoiseMapUniform(rms=0.35)
-    cubes = (
-            DataCube(cube11, noise_map=noise_map),
-            DataCube(cube22, noise_map=noise_map),
-    )
-    stack = CubeStack(cubes)
-    return stack
-
-
-def test_fit_cube(store_name='run/test_cube_multin'):
-    store_filen = f'{store_name}.store'
-    if Path(store_filen).exists():
-        shutil.rmtree(store_filen)
-    stack = get_test_cubestack(full=False)
-    utrans = get_irdc_priors(vsys=63.7)  # correct for G23481 data
-    fitter = CubeFitter(stack, utrans, ncomp_max=1)
-    fitter.fit_cube(store_name=store_name, nproc=8)
 
 
 def aggregate_run_attributes(store):
@@ -801,7 +769,7 @@ def quantize_conv_marginals(store):
                 range(data.shape[3]),
         )
     for i_p, x in enumerate(bins):
-        # convert bin edges to bin edges
+        # convert bin edges to bin centers
         for i_m, i_b, i_l in make_cart_prod():
             y = data[i_m,i_p,i_b,i_l]
             margs[i_m,i_p,i_b,i_l,:] = np.interp(quan, y, x)
@@ -856,10 +824,10 @@ def deblend_hf_intensity(store, stack):
         params = pmap[i_l,i_b,:,i_m].copy()  # make contiguous
         amm11_predict(spec11, params)
         amm22_predict(spec22, params)
-        pkint[ i_l,i_b,i_m,0] = spec11.max_spec()
-        pkint[ i_l,i_b,i_m,1] = spec22.max_spec()
-        intint[i_l,i_b,i_m,0] = spec11.sum_spec()
-        intint[i_l,i_b,i_m,1] = spec22.sum_spec()
+        pkint[ i_l,i_b,i_m,0] = spec11.max_spec
+        pkint[ i_l,i_b,i_m,1] = spec22.max_spec
+        intint[i_l,i_b,i_m,0] = spec11.sum_spec
+        intint[i_l,i_b,i_m,1] = spec22.sum_spec
     # scale intensities by velocity channel width to put in K*km/s
     intint[:,:,:,0] *= stack.cubes[0].dv
     intint[:,:,:,1] *= stack.cubes[1].dv
@@ -889,19 +857,83 @@ def postprocess_run(store, stack, par_bins, std_pix=None):
     deblend_hf_intensity(store, stack)
 
 
+##############################################################################
+#                                 Tests
+##############################################################################
+
+def test_nested(ncomp=2, prefix='test'):
+    synspec = get_test_spectra()
+    spectra = np.array([syn.to_ammspec() for syn in synspec])
+    amm1 = spectra[0]
+    amm2 = spectra[1]
+    utrans = get_irdc_priors(vsys=0)
+    with h5py.File('test.hdf', 'a', driver='core') as hdf:
+        group = hdf.require_group(f'{prefix}/{ncomp}')
+        dumper = Dumper(group, no_dump=True)
+        runner = AmmoniaRunner(spectra, utrans, ncomp)
+        # transform and spectral prediction
+        for _ in range(1000):
+            utheta = np.random.uniform(0, 1, size=6*ncomp)
+            utrans.transform(utheta, ncomp)
+            amm_predict(amm1, utheta)
+            amm_predict(amm2, utheta)
+            amm1.loglikelihood
+            amm2.loglikelihood
+        # likelihood evaluation
+        for _ in range(1000):
+            utheta = np.random.uniform(0, 1, size=6*ncomp)
+            runner.loglikelihood(utheta)
+        # full MultiNest run
+        for _ in range(20):
+            run_multinest(runner, dumper, nlive=100, seed=-1, tol=1.0, efr=0.3,
+                    updInt=2000)
+    return synspec, spectra, runner
+
+
+def get_test_cubestack(full=False):
+    # NOTE hack in indexing because last channel is all NaN's
+    cube11 = spectral_cube.SpectralCube.read('data/test_cube_11.fits')[:-1]
+    cube22 = spectral_cube.SpectralCube.read('data/test_cube_22.fits')[:-1]
+    if not full:
+        cube11 = cube11[:,155:195,155:195]
+        cube22 = cube22[:,155:195,155:195]
+    noise_map = NoiseMapUniform(rms=0.35)
+    cubes = (
+            DataCube(cube11, noise_map=noise_map, trans_id=1),
+            DataCube(cube22, noise_map=noise_map, trans_id=2),
+    )
+    stack = CubeStack(cubes)
+    return stack
+
+
+def test_fit_cube(store_name='run/test_cube_multin'):
+    store_filen = f'{store_name}.store'
+    if Path(store_filen).exists():
+        shutil.rmtree(store_filen)
+    stack = get_test_cubestack(full=False)
+    utrans = get_irdc_priors(vsys=63.7)  # correct for G23481 data
+    fitter = CubeFitter(stack, utrans, AmmoniaRunner, ncomp_max=1)
+    fitter.fit_cube(store_name=store_name, nproc=8)
+
+
 def test_pyspeckit_profiling_compare(n=100):
     # factors which provide constant overhead
+    #params = np.array([-1.0, 10.0, 4.0, 14.5,  0.3,  0.0])
+    #        ^~~~~~~~~ voff, trot, tex, ntot, sigm, orth
+    utrans = get_irdc_priors()
     s11, s22 = get_test_spectra()
     xarr = s11.xarr.value.copy()
     data = s11.sampled_spec
-    params = np.array([-1.0, 10.0, 4.0, 14.5,  0.3])
-    #        ^~~~~~~~~ voff, trot, tex, ntot, sigm
-    amms = AmmoniaSpectrum(xarr, data, 0.1)
+    amms = AmmoniaSpectrum(xarr, data, 0.1, trans_id=1)
+    AmmoniaRunner()
     # loop spectra to average function calls by themselves
     for _ in range(n):
+        params = np.random.uniform(0, 1, size=6)
+        utrans.transform(params, 1)
         pyspeckit.spectrum.models.ammonia.ammonia(
-                s11.xarr, xoff_v=-1.0, trot=10.0, tex=4.0, ntot=14.5,
-                width=0.3, fortho=0, line_names=['oneone'])
-        amm11_predict(amms, params)
+                s11.xarr, xoff_v=params[0], trot=params[1], tex=params[2],
+                ntot=params[3], width=params[4], fortho=params[5],
+                line_names=['oneone'])
+        amm_predict(amms, params)
 
 

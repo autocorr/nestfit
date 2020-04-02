@@ -12,16 +12,15 @@ import matplotlib as mpl
 from matplotlib import (patheffects, animation)
 from matplotlib import pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
-from mayavi import mlab as mvi
 
 import getdist
 from getdist import plots as gd_plt
 import pyspeckit
 from astropy.wcs import WCS
 
-from nestfit import (get_par_names, TEX_LABELS, TEX_LABELS_NU)
 from nestfit.synth_spectra import (SyntheticSpectrum, get_test_spectra)
-from nestfit.wrapped import (amm11_predict, amm22_predict)
+from nestfit.models.ammonia import (AmmoniaSpectrum, amm_predict,
+        get_par_names, TEX_LABELS, TEX_LABELS_NU)
 
 
 plt.rc('font', size=10, family='serif')
@@ -420,6 +419,7 @@ def plot_conv_quan_props(sp, quan_ix=4, outname='conv_props'):
 
 
 def plot_3d_volume(sp, outname='volume_field_contour'):
+    from mayavi import mlab as mvi
     db_data = sp.store.hdf['/products/hf_deblended'][...]
     data = np.nansum(db_data, axis=1)[0,...]
     vmin, vmax = np.nanmin(data), np.nanmax(data)
@@ -536,26 +536,32 @@ def plot_amm_specfit_nsrun(sp, stack, pix, n_model=1, n_draw=50,
     ani.save(str(out_path), writer='ffmpeg', dpi=300)
 
 
-def test_wrapped_amm_precision():
+def test_amm_predict_precision():
     spectra = get_test_spectra()
-    funcs = (amm11_predict, amm22_predict)
-    # plotting
     fig, axes = plt.subplots(nrows=2, sharex=True, sharey=True, figsize=(4, 3))
-    for syn, predict, ax in zip(spectra, funcs, axes):
+    for i, (syn, ax) in enumerate(zip(spectra, axes)):
         xarr = syn.xarr.value.copy()  # xarr is read-only
-        data = np.empty_like(xarr)
+        data = np.zeros_like(xarr)
         params = syn.params
-        predict(xarr, data, params)
-        diff = np.log10(np.abs((data-syn.sum_spec)))
-        diff[diff < -12] = np.nan
-        print(':: max log10(diff) =', np.nanmax(diff))
-        ax.plot(syn.varr, diff,
-                'k-', drawstyle='steps-mid', linewidth=0.7)
+        amms = AmmoniaSpectrum(xarr, data, 0.1, trans_id=i+1)
+        amm_predict(amms, params)
+        amm_spec = amms.get_spec()
+        diff = np.log10(np.abs(amm_spec - syn.sum_spec) / syn.sum_spec)
+        diff[syn.sum_spec < 1e-3] = np.nan
+        print(':: max log10(diff)   =', np.nanmax(diff))
+        ax.plot(syn.varr, diff, 'k-', drawstyle='steps-mid', linewidth=0.7)
+        scaled = (
+                amm_spec / amm_spec.max()
+                * (np.nanmax(diff) - np.nanmin(diff)) + np.nanmin(diff)
+        )
+        ax.plot(syn.varr, scaled , 'r-', drawstyle='steps-mid', linewidth=0.7,
+                alpha=0.5)
     ax.set_xlim(-30, 30)
+    #ax.set_ylim(-15,  0)
     ax.set_xlabel(r'$v_\mathrm{lsr} \ [\mathrm{km\, s^{-1}}]$')
-    ax.set_ylabel(r'$\log_\mathrm{10}\left( |\Delta T_\mathrm{b}| \right) \ [\mathrm{K}]$')
+    ax.set_ylabel(r'$\log_\mathrm{10}\left( |\Delta T_\mathrm{b}| / T_\mathrm{b} \right) \ [\mathrm{K}]$')
     plt.tight_layout()
-    plt.savefig(Path('cython_test_compare_precision.pdf'))
+    plt.savefig(Path('plots/cython_test_compare_precision.pdf'))
     plt.close('all')
 
 

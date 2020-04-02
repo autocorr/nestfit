@@ -3,7 +3,7 @@ build
 data
 plots
 run
-nestfit/*.html
+nestfit/**/*.html
 
 # Compiled files
 *.py[cod]
