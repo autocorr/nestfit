@@ -20,23 +20,36 @@ calcExpTableEntries(3, 8)
 fillErfTable()
 
 
+# Constants for conditional compilation.
+# Use approximation methods versus exact terms. This mainly applies to whether
+# to use the interpolation function in calculating the temperature axis.
+DEF __APPROX = True
+# Use updated physical and spectroscopic constants.
+DEF __NEW_CONST = True
+# Execute code pathes for debugging
+DEF __DEBUG = False
+
 # Speed of light
 DEF CKMS = 299792.458      # km/s
 DEF CCMS = 29979245800.0   # cm/s
 
-# Other physical constants in CGS
+# Other physical constants in CGS; from `astropy.constants`
 DEF H    = 6.62607015e-27  # erg s, Planck's constant
 DEF KB   = 1.380649e-16    # erg/K, Boltzmann's constant
-#DEF TCMB = 2.7315         # K, T(CMB); [from pyspeckit]
-DEF TCMB = 2.72548         # K, T(CMB); Fixsen (2009) ApJ 707 916F
+IF __NEW_CONST:
+    DEF TCMB = 2.72548     # K, T(CMB); Fixsen (2009) ApJ 707 916F
+ELSE:
+    DEF TCMB = 2.7315      # K, T(CMB); from pyspeckit
 
 # Ammonia rotation constants [Splat ID: 01709]
-# Poynter & Kakar (1975), ApJS, 29, 87; [from pyspeckit]
-#DEF BROT = 298117.06e6
-#DEF CROT = 186726.36e6
-# Coudert & Roueff (2006), A&A 449 855-859
-DEF BROT = 298192.92e6
-DEF CROT = 186695.86e6
+IF __NEW_CONST:
+    # Coudert & Roueff (2006), A&A 449 855-859
+    DEF BROT = 298192.92e6
+    DEF CROT = 186695.86e6
+ELSE:
+    # Poynter & Kakar (1975), ApJS, 29, 87
+    DEF BROT = 298117.06e6
+    DEF CROT = 186726.36e6
 
 # Levels to calculate the partition function over
 DEF NPART = 51
@@ -90,39 +103,41 @@ NU = [
         26.51898e9,      # (8,8)
         27.477943e9,     # (9,9)
 ]
-# Einstein A values from pyspeckit
-# Values computed from:
-#   A = 64 * pi**4 / (3*h * c**3) * nu**3 * mu0**2 * (j / (j + 1))
-#   mu0 = 1.476 D  (Poynter 1984)
-# Note 1 Debye is 1e-18 statC cm
-#EA = [
-#        1.712e-7,        # (1,1)
-#        2.291e-7,        # (2,2)
-#        2.625e-7,        # (3,3)
-#        3.167e-7,        # (4,4)
-#        3.099109e-07,    # (5,5)
-#        3.395797e-07,    # (6,6)
-#        3.747560e-07,    # (7,7)
-#        4.175308e-07,    # (8,8)
-#        2.602045e-07,    # (9,9)
-#]
-# Recomputed Einstein A values using the dipole moment found in
-# Coudert & Roueff (2006), A&A 449 855-859
-#   mu0 = 1.471 D
-# in addition to up-to-date values for `h` and `c`.  These are
-# consistent with the JPL values on Splatalogue to approximately
-# 4 significant digits.
-EA = [
-        1.67524303e-07,  # (1,1)
-        2.24162441e-07,  # (2,2)
-        2.56915917e-07,  # (3,3)
-        2.83423417e-07,  # (4,4)
-        3.09910019e-07,  # (5,5)
-        3.39590403e-07,  # (6,6)
-        3.74750461e-07,  # (7,7)
-        4.17525824e-07,  # (8,8)
-        4.70284410e-07,  # (9,9)
-]
+# Transition Einstein A values
+IF __NEW_CONST:
+    # Einstein A values are calculated using the expression:
+    #   A = 64 * pi**4 / (3*h * c**3) * nu**3 * mu0**2 * (j / (j + 1))
+    # The values computed below use the dipole moment found in
+    # Coudert & Roueff (2006), A&A 449 855-859
+    #   mu0 = 1.471 D     (note 1 Debye is 1e-18 statC cm)
+    # in addition to up-to-date values for `h` and `c`.  These are
+    # consistent with the JPL values on Splatalogue to approximately
+    # 4 significant digits.
+    EA = [
+            1.67524303e-07,  # (1,1)
+            2.24162441e-07,  # (2,2)
+            2.56915917e-07,  # (3,3)
+            2.83423417e-07,  # (4,4)
+            3.09910019e-07,  # (5,5)
+            3.39590403e-07,  # (6,6)
+            3.74750461e-07,  # (7,7)
+            4.17525824e-07,  # (8,8)
+            4.70284410e-07,  # (9,9)
+    ]
+ELSE:
+    # Values from pyspeckit, originally computed with:
+    #   mu0 = 1.476 D  (Poynter 1984)
+    EA = [
+            1.712e-7,        # (1,1)
+            2.291e-7,        # (2,2)
+            2.625e-7,        # (3,3)
+            3.167e-7,        # (4,4)
+            3.099109e-07,    # (5,5)
+            3.395797e-07,    # (6,6)
+            3.747560e-07,    # (7,7)
+            4.175308e-07,    # (8,8)
+            2.602045e-07,    # (9,9)
+    ]
 # Velocity offsets of the hyperfine transitions in km/s
 VOFF[0][:NHF[0]] = [  # (1,1)
         19.851300,  19.315900,  7.8866900,  7.4696700,  7.3513200,
@@ -350,18 +365,27 @@ def partition_func(para, trot):
     return c_partition_func(para, trot)
 
 
+DEF T0_LO = H * 23.0e9 / KB  # Frequency in Hz
+DEF T0_HI = H * 28.0e9 / KB
+DEF T0_XMIN = T0_LO / 8.0    # Upper Tex = 8.0 K
+DEF T0_XMAX = T0_HI / 2.7    # Lower Tex = 2.7 K
+DEF T0_SIZE = 500
 cdef:
-    double T0_LO = H * 23.0e9 / KB
-    double T0_HI = H * 28.0e9 / KB
-    double T0_XMIN = T0_LO / 8.0
-    double T0_XMAX = T0_HI / 2.7
-    int T0_SIZE = 500
     double[::1] T0_X = np.linspace(T0_XMIN, T0_XMAX, T0_SIZE)
     double[::1] T0_Y = 1.0 / (np.exp(T0_X) - 1.0)
     double T0_INV_DX = 1.0 / (T0_X[1] - T0_X[0])
 
 
 cdef inline double c_iemtex_interp(double x) nogil:
+    """
+    Use a linear interpolation to approximate the function:
+        f(x) = 1 / (exp(x) - 1)
+    over the domain in `x` from (0.138, 0.498). This corresponds to frequency
+    values between 23-28 GHz and excitation temperatures between 2.7-8.0 K.
+    Outside of this interval, use the exact solution. Using a linear
+    interpolation results in a relative numerical precision of ~7e-6 (|f'-f|/f)
+    and a ~1.3x speed increase.
+    """
     cdef:
         int i_lo, i_hi
         double x_lo, y_lo, y_hi, slope
@@ -412,8 +436,8 @@ cdef void c_amm_predict(AmmoniaSpectrum s, double *params, int ndim,
         species_frac = 1.0 - orth if t.para else orth
         pop_rotstate = 10.0**ntot * species_frac * zlev / qtot
         expterm = (
-                (1.0 - fast_expn(H * t.nu / (KB * tex))) /
-                (1.0 + fast_expn(H * t.nu / (KB * tex)))
+                (1.0 - c_exp(-H * t.nu / (KB * tex))) /
+                (1.0 + c_exp(-H * t.nu / (KB * tex)))
         )
         fracterm = CCMS**2 * t.ea / (8 * M_PI * t.nu**2)
         widthterm = CKMS / (sigm * t.nu * c_sqrt(2 * M_PI))
@@ -457,13 +481,16 @@ cdef void c_amm_predict(AmmoniaSpectrum s, double *params, int ndim,
             T0 = H * s.xarr[j] / KB
             # Eq: (T0 / (exp(T0 / tex) - 1) - T0 / (exp(T0 / TCMB) - 1))
             #     * (1 - exp(-tau))
-            # The `c_iemtex_interp` has relative accuracy of ~7e-6. Replace
-            # with the first line for an exact solution at 1.3x speed penalty.
-            s.pred[j] += (
-                #T0 * (1.0 / c_expm1(T0 / tex) - s.tbg_arr[j])
-                T0 * (c_iemtex_interp(T0 / tex) - s.tbg_arr[j])
-                * (1.0 - fast_expn(s.tarr[j]))
-            )
+            IF __APPROX:
+                s.pred[j] += (
+                    T0 * (c_iemtex_interp(T0 / tex) - s.tbg_arr[j])
+                    * (1.0 - fast_expn(s.tarr[j]))
+                )
+            ELSE:
+                s.pred[j] += (
+                    T0 * (1.0 / c_expm1(T0 / tex) - s.tbg_arr[j])
+                    * (1.0 - fast_expn(s.tarr[j]))
+                )
 
 
 def amm_predict(AmmoniaSpectrum s, double[::1] params, bint cold=False):

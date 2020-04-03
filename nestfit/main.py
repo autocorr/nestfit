@@ -367,7 +367,7 @@ class HdfStore:
 
 class CubeFitter:
     mn_default_kwargs = {
-            'nlive':    60,
+            'nlive':   100,
             'tol':     1.0,
             'efr':     0.3,
             'updInt': 2000,
@@ -452,7 +452,6 @@ class CubeFitter:
         # link all of the HDF5 files together
         store.link_files()
         store.close()
-
 
 
 def get_multiproc_indices(shape, nproc):
@@ -925,15 +924,14 @@ def test_pyspeckit_profiling_compare(n=100):
     xarr = s11.xarr.value.copy()
     data = s11.sampled_spec
     amms = AmmoniaSpectrum(xarr, data, 0.1, trans_id=1)
-    AmmoniaRunner()
     # loop spectra to average function calls by themselves
     for _ in range(n):
         params = np.random.uniform(0, 1, size=6)
         utrans.transform(params, 1)
+        amm_predict(amms, params)
         pyspeckit.spectrum.models.ammonia.ammonia(
                 s11.xarr, xoff_v=params[0], trot=params[1], tex=params[2],
                 ntot=params[3], width=params[4], fortho=params[5],
                 line_names=['oneone'])
-        amm_predict(amms, params)
 
 

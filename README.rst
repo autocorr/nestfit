@@ -37,10 +37,11 @@ several advantages over non-linear least squares algorithms:
 
 To make fitting large data-cubes (>10,000 spectra) computationally tractable,
 the numeric routines have been implemented in an optimized Cython extension
-module.  As of March, 2020, this provides a factor of 340 reduction in time to
+module.  As of March, 2020, this provides a factor of 450 reduction in time to
 compute a model spectrum compared to the PySpecKit v0.1.22 reference
-implementation. Up-to-date physical constants and spectroscopic constants
-are used and lead to a 1% deviation from the model in PySpecKit.
+implementation. Please note that up-to-date physical constants and
+spectroscopic constants are used and these lead to a 1% deviation from the
+model in PySpecKit.
 
 Installation and Requirements
 -----------------------------
