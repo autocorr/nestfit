@@ -540,14 +540,15 @@ def test_amm_predict_precision():
     spectra = get_test_spectra()
     fig, axes = plt.subplots(nrows=2, sharex=True, sharey=True, figsize=(4, 3))
     for i, (syn, ax) in enumerate(zip(spectra, axes)):
-        xarr = syn.xarr.value.copy()  # xarr is read-only
-        data = np.zeros_like(xarr)
+        amms = syn.to_ammspec()
         params = syn.params
-        amms = AmmoniaSpectrum(xarr, data, 0.1, trans_id=i+1)
         amm_predict(amms, params)
         amm_spec = amms.get_spec()
-        diff = np.log10(np.abs(amm_spec - syn.sum_spec) / syn.sum_spec)
-        diff[syn.sum_spec < 1e-3] = np.nan
+        syn_spec = syn.sum_spec
+        is_close = np.allclose(amm_spec, syn_spec, rtol=1e-8, atol=1e-5)
+        print(f':: Close? {is_close}')
+        diff = np.log10(np.abs(amm_spec - syn_spec)) - np.log10(syn_spec)
+        diff[syn_spec < 1e-3] = np.nan
         print(':: max log10(diff)   =', np.nanmax(diff))
         ax.plot(syn.varr, diff, 'k-', drawstyle='steps-mid', linewidth=0.7)
         scaled = (

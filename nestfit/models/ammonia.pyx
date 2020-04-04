@@ -21,11 +21,13 @@ fillErfTable()
 
 
 # Constants for conditional compilation.
-# Use approximation methods versus exact terms. This mainly applies to whether
-# to use the interpolation function in calculating the temperature axis.
-DEF __APPROX = True
+# Use approximation methods versus exact terms. This applies to using:
+#   * `fast_expn(x)` function in-place of `c_exp(-x)`
+#   * calculation of the gaussian profiles over a limited neighborhood
+#   * linear interpolation of the Tex-term in the brightness temperature axis
+DEF __APPROX = False
 # Use updated physical and spectroscopic constants.
-DEF __NEW_CONST = True
+DEF __NEW_CONST = False
 # Execute code pathes for debugging
 DEF __DEBUG = False
 
@@ -73,6 +75,7 @@ cdef:
     double EA[N_LEVELS]
     double VOFF[N_LEVELS][MAX_HF_N]
     double TAU_WTS[N_LEVELS][MAX_HF_N]
+
 # J quantum numbers for para states
 JORTH = [i for i in range(NPART) if i % 3 == 0]
 # J quantum numbers for ortho states
@@ -89,6 +92,7 @@ NHF = [
         7,   # (8,8)
         1,   # (9,9)
 ]
+
 # Ammonia inversion transition rest frequencies
 # In Hz, note that for (1,1) Erik's custom freq is used,
 # see pyspeckit issue 91.
@@ -103,6 +107,7 @@ NU = [
         26.51898e9,      # (8,8)
         27.477943e9,     # (9,9)
 ]
+
 # Transition Einstein A values
 IF __NEW_CONST:
     # Einstein A values are calculated using the expression:
@@ -126,7 +131,7 @@ IF __NEW_CONST:
     ]
 ELSE:
     # Values from pyspeckit, originally computed with:
-    #   mu0 = 1.476 D  (Poynter 1984)
+    #   mu0 = 1.476 D  (Poynter & Kakar 1975; pg. 9)
     EA = [
             1.712e-7,        # (1,1)
             2.291e-7,        # (2,2)
@@ -138,6 +143,7 @@ ELSE:
             4.175308e-07,    # (8,8)
             2.602045e-07,    # (9,9)
     ]
+
 # Velocity offsets of the hyperfine transitions in km/s
 VOFF[0][:NHF[0]] = [  # (1,1)
         19.851300,  19.315900,  7.8866900,  7.4696700,  7.3513200,
@@ -183,29 +189,51 @@ VOFF[7][:NHF[7]] = [  # (8,8)
 VOFF[8][:NHF[8]] = [  # (9,9)
         0.0,
 ]
+
 # Optical depth weights of the hyperfine transitions, unitless.
 # Weights are taken from pyspeckit and normalized.
 # Note that the magnetic hyperfines are not included past (3,3).
+# Note the precision on (1,1)-(3,3) is excessive, as the weights are only known
+# to about 5-6 digits, but present for the purposes of testing the numerical
+# accuracy against pyspeckit.
 TAU_WTS[0][:NHF[0]] = [  # (1,1)
-        0.03703694, 0.07407389, 0.04629643, 0.08333337, 0.00925949,
-        0.01851847, 0.00925949, 0.00925949, 0.04629643, 0.01666648,
-        0.14999978, 0.23333315, 0.01666648, 0.04629643, 0.00925949,
-        0.08333337, 0.03703694, 0.07407389,
+        3.7036944444583331e-02, 7.4073888889166661e-02,
+        4.6296430555354165e-02, 8.3333374999937510e-02,
+        9.2594861107708343e-03, 1.8518472222291665e-02,
+        9.2594861107708343e-03, 9.2594861107708343e-03,
+        4.6296430555354165e-02, 1.6666475000287499e-02,
+        1.4999977500033751e-01, 2.3333315000027499e-01,
+        1.6666475000287499e-02, 4.6296430555354165e-02,
+        9.2594861107708343e-03, 8.3333374999937510e-02,
+        3.7036944444583331e-02, 7.4073888889166661e-02,
 ]
 TAU_WTS[1][:NHF[1]] = [  # (2,2)
-        0.00333330, 0.02999971, 0.01666651, 0.02962943, 0.02074116,
-        0.00148111, 0.01666651, 0.00925935, 0.00846544, 0.21296341,
-        0.39788440, 0.11666714, 0.00925935, 0.00846544, 0.01666651,
-        0.00148111, 0.02074116, 0.02962943, 0.01666651, 0.02999971,
-        0.00333330,
+        3.3333014814319341e-03, 2.9999713332887409e-02,
+        1.6666507407159671e-02, 2.9629434979121079e-02,
+        2.0741161893659245e-02, 1.4811134150653125e-03,
+        1.6666507407159671e-02, 9.2593477367631464e-03,
+        8.4654390943867397e-03, 2.1296340535048242e-01,
+        3.9788439670906156e-01, 1.1666714444518766e-01,
+        9.2593477367631464e-03, 8.4654390943867397e-03,
+        1.6666507407159671e-02, 1.4811134150653125e-03,
+        2.0741161893659245e-02, 2.9629434979121079e-02,
+        1.6666507407159671e-02, 2.9999713332887409e-02,
+        3.3333014814319341e-03,
 ]
 TAU_WTS[2][:NHF[2]] = [  # (3,3)
-        0.01073301, 0.00735985, 0.00300556, 0.00480854, 0.00582206,
-        0.00774758, 0.00434729, 0.0101431 , 0.01682902, 0.00909107,
-        0.00947005, 0.00829898, 0.25670824, 0.40182837, 0.15524222,
-        0.00829898, 0.00947005, 0.01682902, 0.00434729, 0.00774758,
-        0.00582206, 0.0101431 , 0.00480854, 0.00300556, 0.00735985,
-        0.01073301,
+        1.0733009496302131e-02, 7.3598529604831297e-03,
+        3.0055577436436044e-03, 4.8085422957419802e-03,
+        5.8220646798827188e-03, 7.7475821627062281e-03,
+        4.3472933350838039e-03, 1.0143100958382566e-02,
+        1.6829022799877465e-02, 9.0910682245853580e-03,
+        9.4700450746138028e-03, 8.2989803509693240e-03,
+        2.5670824033959128e-01, 4.0182836637346286e-01,
+        1.5524222134698701e-01, 8.2989803509693240e-03,
+        9.4700450746138028e-03, 1.6829022799877465e-02,
+        4.3472933350838039e-03, 7.7475821627062281e-03,
+        5.8220646798827188e-03, 1.0143100958382566e-02,
+        4.8085422957419802e-03, 3.0055577436436044e-03,
+        7.3598529604831297e-03, 1.0733009496302131e-02,
 ]
 TAU_WTS[3][:NHF[3]] = [  # (4,4)
         0.2431, 0.0162, 0.0162, 0.3008, 0.0163, 0.0163, 0.3911,
@@ -264,7 +292,7 @@ TEX_LABELS = [
         r'$T_\mathrm{ex} \ [\mathrm{K}]$',
         r'$\log(N_\mathrm{p}) \ [\mathrm{cm^{-2}}]$',
         r'$\sigma_\mathrm{v} \ [\mathrm{km\, s^{-1}}]$',
-        r'$f_\mathrm{ortho}$',
+        r'$f_\mathrm{o}$',
 ]
 
 TEX_LABELS_NU = [  # without units
@@ -273,7 +301,7 @@ TEX_LABELS_NU = [  # without units
         r'$T_\mathrm{ex}$',
         r'$\log(N_\mathrm{p})$',
         r'$\sigma_\mathrm{v}$',
-        r'$f_\mathrm{ortho}$',
+        r'$f_\mathrm{o}$',
 ]
 
 
@@ -332,15 +360,25 @@ cdef inline double swift_convert(double tkin) nogil:
     "cold ammonia" approximation derived in Swift et al. (2005) by equation A6.
         https://ui.adsabs.harvard.edu/abs/2005ApJ...620..823S/abstract
     """
-    return tkin / (1.0 + (tkin / 41.18) * c_log(1.0 + 0.6 * fast_expn(15.7 / tkin)))
+    IF __APPROX:
+        return tkin / (1.0 + (tkin / 41.18) * c_log(1.0 + 0.6 * fast_expn(15.7 / tkin)))
+    ELSE:
+        return tkin / (1.0 + (tkin / 41.18) * c_log(1.0 + 0.6 * c_exp(-15.7 / tkin)))
 
 
 cdef inline double c_partition_level(int j, double trot) nogil:
-    return (
-            (2 * j + 1)
-            * fast_expn(H * (BROT * j * (j + 1)
-            + (CROT - BROT) * j * j) / (KB * trot))
-    )
+    IF __APPROX:
+        return (
+                (2 * j + 1)
+                * fast_expn(H * (BROT * j * (j + 1)
+                + (CROT - BROT) * j * j) / (KB * trot))
+        )
+    ELSE:
+        return (
+                (2 * j + 1)
+                * c_exp(-H * (BROT * j * (j + 1)
+                + (CROT - BROT) * j * j) / (KB * trot))
+        )
 
 
 cdef inline double c_partition_func(bint para, double trot) nogil:
@@ -369,7 +407,7 @@ DEF T0_LO = H * 23.0e9 / KB  # Frequency in Hz
 DEF T0_HI = H * 28.0e9 / KB
 DEF T0_XMIN = T0_LO / 8.0    # Upper Tex = 8.0 K
 DEF T0_XMAX = T0_HI / 2.7    # Lower Tex = 2.7 K
-DEF T0_SIZE = 500
+DEF T0_SIZE = 1000
 cdef:
     double[::1] T0_X = np.linspace(T0_XMIN, T0_XMAX, T0_SIZE)
     double[::1] T0_Y = 1.0 / (np.exp(T0_X) - 1.0)
@@ -383,8 +421,8 @@ cdef inline double c_iemtex_interp(double x) nogil:
     over the domain in `x` from (0.138, 0.498). This corresponds to frequency
     values between 23-28 GHz and excitation temperatures between 2.7-8.0 K.
     Outside of this interval, use the exact solution. Using a linear
-    interpolation results in a relative numerical precision of ~7e-6 (|f'-f|/f)
-    and a ~1.3x speed increase.
+    interpolation with N=1000 results in a relative numerical precision of
+    ~1.8e-6 (|f'-f|/f) and a ~1.3x speed increase.
     """
     cdef:
         int i_lo, i_hi
@@ -454,26 +492,32 @@ cdef void c_amm_predict(AmmoniaSpectrum s, double *params, int ndim,
             hf_nucen  = hf_freq - hf_offset
             hf_tau    = tau_main * t.tau_wts[j]
             hf_idenom = 0.5 / (hf_width * hf_width)
-            # For each HF line, sum the optical depth in each channel. The
-            # Gaussians are approximated by only computing them within the
-            # range of `exp(-12.5)` (5-sigma, 3.7e-6) away from the HF line
-            # center center.
-            #   Eq:  exp(-nu**2 * hf_idenom) = exp(-12.5)
-            nu_cutoff = c_sqrt(12.5 / hf_idenom)
-            nu_lo = (hf_nucen - s.nu_min - nu_cutoff)
-            nu_hi = (hf_nucen - s.nu_min + nu_cutoff)
-            # Get the lower and upper indices then check bounds
-            nu_lo_ix = <int>c_floor(nu_lo/s.nu_chan)
-            nu_hi_ix = <int>c_floor(nu_hi/s.nu_chan)
-            if nu_hi_ix < 0 or nu_lo_ix > s.size-1:
-                continue
-            nu_lo_ix = 0 if nu_lo_ix < 0 else nu_lo_ix
-            nu_hi_ix = s.size-1 if nu_hi_ix > s.size-1 else nu_hi_ix
-            # Calculate the Gaussian tau profile over the interval
-            for k in range(nu_lo_ix, nu_hi_ix):
-                nu = s.xarr[k] - hf_nucen
-                tau_exp = nu * nu * hf_idenom
-                s.tarr[k] += hf_tau * fast_expn(tau_exp)
+            IF __APPROX:
+                # For each HF line, sum the optical depth in each channel. The
+                # Gaussians are approximated by only computing them within the
+                # range of `exp(-12.5)` (5-sigma, 3.7e-6) away from the HF line
+                # center center.
+                #   Eq:  exp(-nu**2 * hf_idenom) = exp(-12.5)
+                nu_cutoff = c_sqrt(12.5 / hf_idenom)
+                nu_lo = (hf_nucen - s.nu_min - nu_cutoff)
+                nu_hi = (hf_nucen - s.nu_min + nu_cutoff)
+                # Get the lower and upper indices then check bounds
+                nu_lo_ix = <int>c_floor(nu_lo/s.nu_chan)
+                nu_hi_ix = <int>c_floor(nu_hi/s.nu_chan)
+                if nu_hi_ix < 0 or nu_lo_ix > s.size-1:
+                    continue
+                nu_lo_ix = 0 if nu_lo_ix < 0 else nu_lo_ix
+                nu_hi_ix = s.size-1 if nu_hi_ix > s.size-1 else nu_hi_ix
+                # Calculate the Gaussian tau profile over the interval
+                for k in range(nu_lo_ix, nu_hi_ix):
+                    nu = s.xarr[k] - hf_nucen
+                    tau_exp = nu * nu * hf_idenom
+                    s.tarr[k] += hf_tau * fast_expn(tau_exp)
+            ELSE:
+                for k in range(s.size):
+                    nu = s.xarr[k] - hf_nucen
+                    tau_exp = nu * nu * hf_idenom
+                    s.tarr[k] += hf_tau * c_exp(-tau_exp)
         # Compute the brightness temperature
         for j in range(s.size):
             if s.tarr[j] == 0.0:
@@ -488,8 +532,8 @@ cdef void c_amm_predict(AmmoniaSpectrum s, double *params, int ndim,
                 )
             ELSE:
                 s.pred[j] += (
-                    T0 * (1.0 / c_expm1(T0 / tex) - s.tbg_arr[j])
-                    * (1.0 - fast_expn(s.tarr[j]))
+                    (T0 / c_expm1(T0 / tex) - T0 * s.tbg_arr[j])
+                    * (1.0 - c_exp(-s.tarr[j]))
                 )
 
 
@@ -565,29 +609,28 @@ cdef class AmmoniaRunner(Runner):
 #                                 Tests
 ##############################################################################
 
-def is_close(v1, v2, tol=-7.0):
-    return np.log10(np.abs(v1 - v2)) < tol
-
-
+# NOTE for these tests to pass, the module should be compiled with
+# `__NEW_CONST=False`
 def test_partition_level():
     # Values computed from `Zpara` and `Zortho` values in
     #   pyspeckit.spectrum.models.ammonia.ammonia_model
     tol = -7.0
     zlev1 = c_partition_level(1, 10.0)  # J=1, Trot=10.0
     zlev1_psk = 0.29279893434489096
-    assert is_close(zlev1, zlev1_psk, tol=tol)
+    np.testing.assert_almost_equal(zlev1, zlev1_psk, decimal=7)
     zlev2 = c_partition_level(2, 10.0)  # J=2, Trot=10.0
     zlev2_psk = 0.007933862262432792
-    assert is_close(zlev2, zlev2_psk, tol=tol)
+    np.testing.assert_almost_equal(zlev2, zlev2_psk, decimal=7)
     qpara = c_partition_func(True, 10.0)
     qpara_psk = 0.30073281405688107
-    assert is_close(qpara, qpara_psk, tol=tol)
+    np.testing.assert_almost_equal(qpara, qpara_psk, decimal=7)
 
 
 def test_swift_convert():
     tkin = 15
     trot = swift_convert(tkin)
-    assert is_close(trot, 11.0051914101, tol=-8)
+    trot_psk = 14.023487575888257
+    np.testing.assert_almost_equal(trot, trot_psk, decimal=8)
 
 
 def test_iemtex_interp():
@@ -595,6 +638,6 @@ def test_iemtex_interp():
     def f(x): return 1 / (np.exp(x) - 1)
     def diff(x): return np.abs((iemtex_interp(x) - f(x)) / f(x))
     diffs = np.array([diff(x) for x in fine_x])
-    assert diffs.max() < 8e-6
+    np.testing.assert_almost_equal(diffs.max(), 0, decimal=5)
 
 

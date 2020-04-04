@@ -89,7 +89,7 @@ class SyntheticSpectrum:
         self.noise_spec = self.calc_noise()
         self.sampled_spec = self.sum_spec + self.noise_spec
 
-    def calc_profiles(self):
+    def calc_profiles(self, **kwargs):
         n = self.ncomp
         models = np.array([
                 pyspeckit.spectrum.models.ammonia.ammonia(
@@ -100,6 +100,7 @@ class SyntheticSpectrum:
                     ntot  =self.params[3*n+i],
                     width =self.params[4*n+i],
                     fortho=self.params[5*n+i],
+                    **kwargs,
                 )
                 for i in range(self.ncomp)
         ])
