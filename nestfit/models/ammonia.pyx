@@ -10,7 +10,7 @@ import numpy as np
 cimport numpy as np
 np.import_array()
 
-from nestfit.core.math cimport (M_PI, c_exp, c_expm1, c_sqrt, c_abs, c_floor,
+from nestfit.core.math cimport (M_PI, c_exp, c_expm1, c_sqrt, c_floor,
         c_log, fast_expn, calcExpTableEntries, fillErfTable)
 from nestfit.core.core cimport (Spectrum, Runner)
 
@@ -25,9 +25,9 @@ fillErfTable()
 #   * `fast_expn(x)` function in-place of `c_exp(-x)`
 #   * calculation of the gaussian profiles over a limited neighborhood
 #   * linear interpolation of the Tex-term in the brightness temperature axis
-DEF __APPROX = False
+DEF __APPROX = True
 # Use updated physical and spectroscopic constants.
-DEF __NEW_CONST = False
+DEF __NEW_CONST = True
 # Execute code pathes for debugging
 DEF __DEBUG = False
 
@@ -360,10 +360,7 @@ cdef inline double swift_convert(double tkin) nogil:
     "cold ammonia" approximation derived in Swift et al. (2005) by equation A6.
         https://ui.adsabs.harvard.edu/abs/2005ApJ...620..823S/abstract
     """
-    IF __APPROX:
-        return tkin / (1.0 + (tkin / 41.18) * c_log(1.0 + 0.6 * fast_expn(15.7 / tkin)))
-    ELSE:
-        return tkin / (1.0 + (tkin / 41.18) * c_log(1.0 + 0.6 * c_exp(-15.7 / tkin)))
+    return tkin / (1.0 + (tkin / 41.18) * c_log(1.0 + 0.6 * c_exp(-15.7 / tkin)))
 
 
 cdef inline double c_partition_level(int j, double trot) nogil:
@@ -487,7 +484,7 @@ cdef void c_amm_predict(AmmoniaSpectrum s, double *params, int ndim,
         for j in range(t.nhf):
             # Hyperfine (HF) dependent values
             hf_freq   = (1.0 - t.voff[j] / CKMS) * t.nu
-            hf_width  = c_abs(sigm / CKMS * hf_freq)
+            hf_width  = sigm / CKMS * hf_freq
             hf_offset = voff / CKMS * hf_freq
             hf_nucen  = hf_freq - hf_offset
             hf_tau    = tau_main * t.tau_wts[j]

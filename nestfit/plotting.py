@@ -547,9 +547,12 @@ def test_amm_predict_precision():
         syn_spec = syn.sum_spec
         is_close = np.allclose(amm_spec, syn_spec, rtol=1e-8, atol=1e-5)
         print(f':: Close? {is_close}')
-        diff = np.log10(np.abs(amm_spec - syn_spec)) - np.log10(syn_spec)
-        diff[syn_spec < 1e-3] = np.nan
+        #diff = np.log10(np.abs(amm_spec - syn_spec)) - np.log10(syn_spec)
+        #diff[syn_spec < 1e-3] = np.nan
+        diff = np.log10(np.abs(amm_spec - syn_spec))
+        diff[diff < -12] = np.nan
         print(':: max log10(diff)   =', np.nanmax(diff))
+        #import ipdb; ipdb.set_trace()
         ax.plot(syn.varr, diff, 'k-', drawstyle='steps-mid', linewidth=0.7)
         scaled = (
                 amm_spec / amm_spec.max()
@@ -560,7 +563,7 @@ def test_amm_predict_precision():
     ax.set_xlim(-30, 30)
     #ax.set_ylim(-15,  0)
     ax.set_xlabel(r'$v_\mathrm{lsr} \ [\mathrm{km\, s^{-1}}]$')
-    ax.set_ylabel(r'$\log_\mathrm{10}\left( |\Delta T_\mathrm{b}| / T_\mathrm{b} \right) \ [\mathrm{K}]$')
+    ax.set_ylabel(r'$\log_\mathrm{10}\left( |\Delta T_\mathrm{b}| \right) \ [\mathrm{K}]$')
     plt.tight_layout()
     plt.savefig(Path('plots/cython_test_compare_precision.pdf'))
     plt.close('all')
