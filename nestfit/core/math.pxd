@@ -4,7 +4,7 @@
 cdef extern from 'math.h' nogil:
     const double M_PI
     const float NAN
-    double c_abs 'abs' (double)
+    double c_abs 'fabs' (double)
     double c_exp 'exp' (double)
     double c_expm1 'expm1' (double)
     double c_log 'log' (double)

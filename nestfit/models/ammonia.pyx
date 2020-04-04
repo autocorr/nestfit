@@ -493,7 +493,7 @@ cdef void c_amm_predict(AmmoniaSpectrum s, double *params, int ndim,
                 # For each HF line, sum the optical depth in each channel. The
                 # Gaussians are approximated by only computing them within the
                 # range of `exp(-12.5)` (5-sigma, 3.7e-6) away from the HF line
-                # center center.
+                # center.
                 #   Eq:  exp(-nu**2 * hf_idenom) = exp(-12.5)
                 nu_cutoff = c_sqrt(12.5 / hf_idenom)
                 nu_lo = (hf_nucen - s.nu_min - nu_cutoff)
