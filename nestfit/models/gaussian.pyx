@@ -10,7 +10,7 @@ import numpy as np
 cimport numpy as np
 np.import_array()
 
-from nestfit.core.math cimport (c_sqrt, c_abs, c_floor,
+from nestfit.core.math cimport (c_sqrt, c_floor,
         fast_expn, calcExpTableEntries, fillErfTable)
 from nestfit.core.core cimport (Spectrum, Runner)
 
@@ -44,7 +44,7 @@ cdef void c_gauss_predict(Spectrum s, double *params, int ndim) nogil:
         voff = params[        i]
         sigm = params[  ncomp+i]
         peak = params[2*ncomp+i]
-        nu_width = c_abs(sigm / CKMS * s.rest_freq)
+        nu_width = sigm / CKMS * s.rest_freq
         nu_cen   = s.rest_freq * (1 - voff / CKMS)
         nu_denom = 0.5 / (nu_width * nu_width)
         # Gaussians are approximated by only computing them within the range

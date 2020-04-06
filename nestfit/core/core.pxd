@@ -3,7 +3,7 @@
 
 cdef class Distribution:
     cdef:
-        int size
+        long size
         double du, dx, xmin, xmax
         double[::1] xax, pdf, cdf, ppf
 
@@ -14,27 +14,27 @@ cdef class Distribution:
 
 cdef class Prior:
     cdef:
-        int p_ix
+        long p_ix
         Distribution dist
     cdef readonly:
-        int n_param
+        long n_param
 
-    cdef void interp(self, double *utheta, int n)
+    cdef void interp(self, double *utheta, long n)
 
 
 cdef class PriorTransformer:
     cdef:
-        int n_prior
+        long n_prior
         Prior[:] priors
     cdef readonly:
-        int n_param
+        long n_param
 
-    cdef void c_transform(self, double *utheta, int ncomp)
+    cdef void c_transform(self, double *utheta, long ncomp)
 
 
 cdef class Spectrum:
     cdef:
-        int size, trans_id
+        long size, trans_id
         double noise, prefactor, null_lnZ
         double rest_freq, nu_chan, nu_min, nu_max
         double[::1] xarr, data, pred, tarr
@@ -46,7 +46,7 @@ cdef class Runner:
     cdef:
         PriorTransformer utrans
     cdef readonly:
-        int n_model, ncomp, n_params, ndim, n_chan_tot
+        long n_model, ncomp, n_params, ndim, n_chan_tot
         double null_lnZ
     cdef public:
         double run_lnZ

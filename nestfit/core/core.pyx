@@ -52,9 +52,9 @@ cdef class Distribution:
             => y' = m * x' + b
         """
         cdef:
-            int i_lo, i_hi
+            long i_lo, i_hi
             double x_lo, y_lo, y_hi, slope
-        i_lo = <int>((self.size - 1) * u)
+        i_lo = <long>((self.size - 1) * u)
         i_hi = i_lo + 1
         x_lo = i_lo * self.du
         y_lo = self.ppf[i_lo]
@@ -72,7 +72,7 @@ cdef class Distribution:
             => x' = 1 / m * (y' - b)
         """
         cdef:
-            int i, i_lo, i_hi
+            long i, i_lo, i_hi
             double x_lo, x_hi, y_lo, y_hi, slope
         if u < self.cdf[0]:
             return self.xmin
@@ -104,7 +104,7 @@ cdef class Distribution:
 
     cdef void cdf_over_interval(self, double x_lo, double x_hi):
         cdef:
-            int i, i_lo, i_hi
+            long i, i_lo, i_hi
             double csum = 0.0
         # If this occurs, it's almost certainly a bug, but guard against it for
         # safety.
@@ -112,12 +112,12 @@ cdef class Distribution:
             x_lo, x_hi = x_hi, x_lo
         # Determine high and low indicies from the interval and guard against
         # out of bounds values.
-        i_lo = <int>((x_lo - self.xmin) / self.dx)
+        i_lo = <long>((x_lo - self.xmin) / self.dx)
         if i_lo >= self.size:
             i_lo = self.size - 1
         elif i_lo < 0:
             i_lo = 0
-        i_hi = <int>((x_hi - self.xmin) / self.dx)
+        i_hi = <long>((x_hi - self.xmin) / self.dx)
         # Guard for if x_hi - x_lo < dx and indices are the same.
         if i_hi == i_lo:
             i_hi = i_lo + 1
@@ -171,10 +171,10 @@ cdef class Prior:
         self.p_ix = p_ix
         self.n_param = 1
 
-    cdef void interp(self, double *utheta, int n):
+    cdef void interp(self, double *utheta, long n):
         cdef:
-            int i
-            int ix = self.p_ix * n
+            long i
+            long ix = self.p_ix * n
         for i in range(n):
             utheta[ix+i] = self.dist.ppf_interp(utheta[ix+i])
 
@@ -188,19 +188,19 @@ cdef class ConstantPrior(Prior):
         self.p_ix = p_ix
         self.n_param = 1
 
-    cdef void interp(self, double *utheta, int n):
+    cdef void interp(self, double *utheta, long n):
         cdef:
-            int i
-            int ix = self.p_ix * n
+            long i
+            long ix = self.p_ix * n
         for i in range(n):
             utheta[ix+i] = self.value
 
 
 cdef class OrderedPrior(Prior):
-    cdef void interp(self, double *utheta, int n):
+    cdef void interp(self, double *utheta, long n):
         cdef:
-            int i
-            int ix = self.p_ix * n
+            long i
+            long ix = self.p_ix * n
             double u, umin
         # Values are sampled from the prior distribution, but a strict
         # ordering of the components is enforced from left-to-right by
@@ -235,10 +235,10 @@ cdef class SpacedPrior(Prior):
         self.p_ix = prior_indep.p_ix
         self.n_param = 1
 
-    cdef void interp(self, double *utheta, int n):
+    cdef void interp(self, double *utheta, long n):
         cdef:
-            int i
-            int ix = self.p_ix * n
+            long i
+            long ix = self.p_ix * n
             double v
         v = self.prior_indep.dist.ppf_interp(utheta[ix])
         utheta[ix] = v
@@ -273,9 +273,9 @@ cdef class ResolvedWidthPrior(Prior):
         self.sep_scale = FWHM * scale
         self.n_param = 2
 
-    cdef void interp(self, double *utheta, int n):
+    cdef void interp(self, double *utheta, long n):
         cdef:
-            int i, ix_v, ix_s
+            long i, ix_v, ix_s
             double v_lo, v_hi, sep, sep_tot, overf_factor
             double[10] min_seps
             Distribution vcen_dist = self.vcen_prior.dist
@@ -338,7 +338,7 @@ cdef class PriorTransformer:
         self.n_prior = n_prior
         self.n_param = n_param
 
-    cdef void c_transform(self, double *utheta, int ncomp):
+    cdef void c_transform(self, double *utheta, long ncomp):
         """
         Parameters
         ----------
@@ -351,13 +351,13 @@ cdef class PriorTransformer:
         # NOTE may do unsafe writes if `utheta` does not have the same
         # size as the number of components for `ncomp`.
         cdef:
-            int i
+            long i
             Prior prior
         for i in range(self.n_prior):
             prior = self.priors[i]
             prior.interp(utheta, ncomp)
 
-    def transform(self, double[::1] utheta, int ncomp):
+    def transform(self, double[::1] utheta, long ncomp):
         if self.n_param * ncomp == utheta.shape[0]:
             self.c_transform(&utheta[0], ncomp)
         else:
@@ -403,7 +403,7 @@ cdef class Spectrum:
 
     cdef double c_loglikelihood(self):
         cdef:
-            int i
+            long i
             double dev
             double lnL = 0.0
         for i in range(self.size):
@@ -442,7 +442,7 @@ cdef class Dumper:
     cdef:
         object group
         bint no_dump
-        int n_calls, n_samples
+        long n_calls, n_samples
         double[::1] quantiles
         list marginal_cols
 

@@ -2,7 +2,6 @@ astropy
 getdist
 h5py
 matplotlib
-mayavi
 numpy
 pyspeckit
 scipy

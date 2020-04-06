@@ -19,7 +19,6 @@ from nestfit.core.core cimport (Spectrum, Runner)
 calcExpTableEntries(3, 8)
 fillErfTable()
 
-
 # Constants for conditional compilation.
 # Use approximation methods versus exact terms. This applies to using:
 #   * `fast_expn(x)` function in-place of `c_exp(-x)`
@@ -67,10 +66,10 @@ DEF N_LEVELS = 9
 # transition. Values taken from:
 #   `pyspeckit.pyspeckit.spectrum.models.ammonia`
 cdef:
-    int i
-    int JORTH[NORTH]
-    int JPARA[NPARA]
-    int NHF[N_LEVELS]
+    long i
+    long JORTH[NORTH]
+    long JPARA[NPARA]
+    long NHF[N_LEVELS]
     double NU[N_LEVELS]
     double EA[N_LEVELS]
     double VOFF[N_LEVELS][MAX_HF_N]
@@ -260,11 +259,11 @@ TAU_WTS[8][:NHF[8]] = [  # (9,9)
 
 
 cdef struct Transition:
-    int n
+    long n
     bint para
     double nu
     double ea
-    int nhf
+    long nhf
     double[MAX_HF_N] voff
     double[MAX_HF_N] tau_wts
 
@@ -341,7 +340,7 @@ cdef class AmmoniaSpectrum(Spectrum):
                 ...
                 9 -> (9,9)
         """
-        cdef int i
+        cdef long i
         assert trans_id in range(1, 10)
         super().__init__(xarr, data, noise, rest_freq=self.trans.nu,
                 trans_id=trans_id)
@@ -363,7 +362,7 @@ cdef inline double swift_convert(double tkin) nogil:
     return tkin / (1.0 + (tkin / 41.18) * c_log(1.0 + 0.6 * c_exp(-15.7 / tkin)))
 
 
-cdef inline double c_partition_level(int j, double trot) nogil:
+cdef inline double c_partition_level(long j, double trot) nogil:
     IF __APPROX:
         return (
                 (2 * j + 1)
@@ -381,7 +380,7 @@ cdef inline double c_partition_level(int j, double trot) nogil:
 cdef inline double c_partition_func(bint para, double trot) nogil:
     # NOTE could likely interpolate for improved performance
     cdef:
-        int j
+        long j
         double Qtot = 0.0
     if para:
         for j in JPARA:
@@ -422,10 +421,10 @@ cdef inline double c_iemtex_interp(double x) nogil:
     ~1.8e-6 (|f'-f|/f) and a ~1.3x speed increase.
     """
     cdef:
-        int i_lo, i_hi
+        long i_lo, i_hi
         double x_lo, y_lo, y_hi, slope
     if T0_XMIN < x < T0_XMAX:
-        i_lo = <int>((x - T0_XMIN) * T0_INV_DX)
+        i_lo = <long>((x - T0_XMIN) * T0_INV_DX)
         i_hi = i_lo + 1
         x_lo = T0_X[i_lo]
         y_lo = T0_Y[i_lo]
@@ -440,12 +439,12 @@ def iemtex_interp(x):
     return c_iemtex_interp(x)
 
 
-cdef void c_amm_predict(AmmoniaSpectrum s, double *params, int ndim,
+cdef void c_amm_predict(AmmoniaSpectrum s, double *params, long ndim,
             bint cold) nogil:
     cdef:
-        int i, j, k
-        int nu_lo_ix, nu_hi_ix
-        int ncomp = ndim // 6
+        long i, j, k
+        long ncomp = ndim // 6
+        long nu_lo_ix, nu_hi_ix
         double trot, tex, ntot, sigm, voff, orth
         double zlev, qtot, species_frac, pop_rotstate
         double expterm, fracterm, widthterm, tau_main
@@ -499,8 +498,8 @@ cdef void c_amm_predict(AmmoniaSpectrum s, double *params, int ndim,
                 nu_lo = (hf_nucen - s.nu_min - nu_cutoff)
                 nu_hi = (hf_nucen - s.nu_min + nu_cutoff)
                 # Get the lower and upper indices then check bounds
-                nu_lo_ix = <int>c_floor(nu_lo/s.nu_chan)
-                nu_hi_ix = <int>c_floor(nu_hi/s.nu_chan)
+                nu_lo_ix = <long>c_floor(nu_lo/s.nu_chan)
+                nu_hi_ix = <long>c_floor(nu_hi/s.nu_chan)
                 if nu_hi_ix < 0 or nu_lo_ix > s.size-1:
                     continue
                 nu_lo_ix = 0 if nu_lo_ix < 0 else nu_lo_ix
@@ -541,7 +540,7 @@ def amm_predict(AmmoniaSpectrum s, double[::1] params, bint cold=False):
 cdef class AmmoniaRunner(Runner):
     cdef:
         bint cold
-        int n_spec
+        long n_spec
         AmmoniaSpectrum[:] spectra
 
     def __init__(self, spectra, utrans, ncomp=1, cold=False):
@@ -592,7 +591,7 @@ cdef class AmmoniaRunner(Runner):
 
     cdef void c_loglikelihood(self, double *utheta, double *lnL):
         cdef:
-            int i
+            long i
             AmmoniaSpectrum spec
         lnL[0] = 0.0
         self.utrans.c_transform(utheta, self.ncomp)
