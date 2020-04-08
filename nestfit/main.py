@@ -27,8 +27,9 @@ from astropy.io import fits
 
 from nestfit.synth_spectra import get_test_spectra
 from nestfit.core.core import (
-        Prior, ConstantPrior, OrderedPrior, SpacedPrior, ResolvedWidthPrior,
-        Distribution, PriorTransformer, Dumper, run_multinest,
+        Prior, ConstantPrior, DuplicatePrior, OrderedPrior, SpacedPrior,
+        ResolvedWidthPrior, Distribution, PriorTransformer, Dumper,
+        run_multinest,
 )
 from nestfit.models.ammonia import (
         amm_predict, AmmoniaSpectrum, AmmoniaRunner,
@@ -41,9 +42,9 @@ def nans(shape, dtype=None):
 
 def get_irdc_priors(size=500, vsys=0.0):
     """
-    Evaluate the inverse cumulative prior functions and construct a
-    `PriorTransformer` instance for use with MultiNest. These distributions are
-    constructed for the IRDCs observed in Svoboda et al. (in prep).
+    Evaluate the prior distributions and construct a `PriorTransformer`
+    instance for use with MultiNest. These distributions are constructed for
+    the IRDCs observed in Svoboda et al. (in prep).
 
     Parameters
     ----------
@@ -93,6 +94,54 @@ def get_irdc_priors(size=500, vsys=0.0):
             Prior(d_tex,  2),
             Prior(d_ntot, 3),
             #Prior(d_sigm, 4),
+            ConstantPrior(0, 5),
+    ])
+    return PriorTransformer(priors)
+
+
+def get_synth_priors(size=500):
+    """
+    Evaluate the prior distributions and construct a `PriorTransformer`
+    instance for use with MultiNest. These distributions are constructed for
+    the tests of synthetic ammonia spectra, as used in Keown et al. (2019) in
+    S6.1 pg 19-20.
+
+    Parameters
+    ----------
+    size : int
+        Number of even, linearly spaced samples in the distribution
+    """
+    u = np.linspace(0, 1, size)
+    # prior distribution x axes
+    # 0 voff [-2.5,  2.5] km/s  (centered on vsys)
+    #   vdep [-2.5,  2.5] km/s
+    # 1 tkin [ 8.0, 25.0] K
+    # 2 tex  [ 8.0, 25.0] K (in LTE, fixed to tkin)
+    # 3 ntot [13.0, 14.5] log(cm^-2)
+    # 4 sigm [ 0.0,  2.0] km/s  (scaled log-normal)
+    x_voff =  5.00 * u -  2.50
+    x_vdep =  5.00 * u -  2.50
+    x_tkin = 17.00 * u +  8.00
+    x_ntot =  1.50 * u + 13.00
+    x_sigm =  2.00 * u
+    # prior PDFs values
+    f_voff = np.ones_like(u) / size
+    f_vdep = np.ones_like(u) / size
+    f_tkin = np.ones_like(u) / size
+    f_ntot = np.ones_like(u) / size
+    f_sigm = stats.lognorm(0.85, loc=0.026, scale=0.138).pdf(u)
+    # and distribution instances
+    d_voff = Distribution(x_voff, f_voff)
+    d_vdep = Distribution(x_vdep, f_vdep)
+    d_trot = Distribution(x_tkin, f_tkin)
+    d_ntot = Distribution(x_ntot, f_ntot)
+    d_sigm = Distribution(x_sigm, f_sigm)
+    # interpolation values, transformed to the intervals:
+    priors = np.array([
+            SpacedPrior(Prior(d_voff, 0), Prior(d_vdep, 0)),
+            DuplicatePrior(d_tkin, 1, 2),
+            Prior(d_ntot, 3),
+            Prior(d_sigm, 4),
             ConstantPrior(0, 5),
     ])
     return PriorTransformer(priors)

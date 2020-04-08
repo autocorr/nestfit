@@ -167,9 +167,9 @@ class ParamSampler:
         ])
 
 
-def make_indep_synth_cube():
+def make_indep_synth_cube(nrows=4096):
     outdir = 'run/synth'
-    im_shape = (8, 4096)  # 8*4096 -> 32768; 8 rows for multi-processing purposes
+    im_shape = (8, nrows)  # 8*4096 -> 32768; 8 rows for multi-processing purposes
     param_sampler = ParamSampler()
     # make synthetic cubes
     spectra = get_test_spectra()

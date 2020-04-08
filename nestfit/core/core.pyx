@@ -179,6 +179,30 @@ cdef class Prior:
             utheta[ix+i] = self.dist.ppf_interp(utheta[ix+i])
 
 
+cdef class DuplicatePrior(Prior):
+    cdef:
+        long p_ix_dup
+
+    def __init__(self, dist, p_ix, p_ix_dup):
+        assert p_ix >= 0
+        assert p_ix_dup >= 0
+        self.p_ix = p_ix
+        self.p_ix_dup = p_ix_dup
+        self.dist = dist
+        self.n_param = 2
+
+    cdef void interp(self, double *utheta, long n):
+        cdef:
+            long i
+            long ix = self.p_ix * n
+            long ix_dup = self.p_ix_dup * n
+            double v
+        for i in range(n):
+            v = self.dist.ppf_interp(utheta[ix+i])
+            utheta[ix+i] = v
+            utheta[ix_dup+i] = v
+
+
 cdef class ConstantPrior(Prior):
     cdef:
         double value
