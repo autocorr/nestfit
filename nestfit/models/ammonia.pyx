@@ -440,7 +440,7 @@ def iemtex_interp(x):
 
 
 cdef void c_amm_predict(AmmoniaSpectrum s, double *params, long ndim,
-            bint cold) nogil:
+            bint cold, bint lte) nogil:
     cdef:
         long i, j, k
         long ncomp = ndim // 6
@@ -463,6 +463,8 @@ cdef void c_amm_predict(AmmoniaSpectrum s, double *params, long ndim,
         orth = params[5*ncomp+i]
         if cold:
             trot = swift_convert(trot)
+        if lte:
+            tex = trot
         # Calculate the partition function and the level populations
         zlev = c_partition_level(t.n, trot)
         qtot = c_partition_func(t.para, trot)
@@ -533,17 +535,18 @@ cdef void c_amm_predict(AmmoniaSpectrum s, double *params, long ndim,
                 )
 
 
-def amm_predict(AmmoniaSpectrum s, double[::1] params, bint cold=False):
-    c_amm_predict(s, &params[0], params.shape[0], cold)
+def amm_predict(AmmoniaSpectrum s, double[::1] params, bint cold=False,
+        bint lte=False):
+    c_amm_predict(s, &params[0], params.shape[0], cold, lte)
 
 
 cdef class AmmoniaRunner(Runner):
     cdef:
-        bint cold
+        bint cold, lte
         long n_spec
         AmmoniaSpectrum[:] spectra
 
-    def __init__(self, spectra, utrans, ncomp=1, cold=False):
+    def __init__(self, spectra, utrans, ncomp=1, cold=False, lte=False):
         """
         Parameters
         ----------
@@ -557,6 +560,8 @@ cdef class AmmoniaRunner(Runner):
         cold : bool, default False
             Apply the Swift et al. (2005) approximation to convert gas kinetic
             temperature to rotation temperature.
+        lte : bool, default False
+            Set the excitation temperature equal to the rotation temperature.
 
         Attributes
         ----------
@@ -574,6 +579,7 @@ cdef class AmmoniaRunner(Runner):
         self.utrans = utrans
         self.ncomp = ncomp
         self.cold = cold
+        self.lte = lte
         self.n_spec = len(spectra)
         self.n_params = self.n_model * ncomp
         self.ndim = self.n_params  # no nuisance parameters
@@ -586,7 +592,7 @@ cdef class AmmoniaRunner(Runner):
 
     @classmethod
     def from_data(cls, spec_data, utrans, **kwargs):
-        spectra = [AmmoniaSpectrum(*args) for args in spec_data]
+        spectra = np.array([AmmoniaSpectrum(*args) for args in spec_data])
         return cls(spectra, utrans, **kwargs)
 
     cdef void c_loglikelihood(self, double *utheta, double *lnL):
@@ -597,7 +603,7 @@ cdef class AmmoniaRunner(Runner):
         self.utrans.c_transform(utheta, self.ncomp)
         for i in range(self.n_spec):
             spec = self.spectra[i]
-            c_amm_predict(spec, utheta, self.ndim, self.cold)
+            c_amm_predict(spec, utheta, self.ndim, self.cold, self.lte)
             lnL[0] += spec.c_loglikelihood()
 
 

@@ -129,11 +129,11 @@ def get_synth_priors(size=500):
     f_vdep = np.ones_like(u) / size
     f_tkin = np.ones_like(u) / size
     f_ntot = np.ones_like(u) / size
-    f_sigm = stats.lognorm(0.85, loc=0.026, scale=0.138).pdf(u)
+    f_sigm = sp.stats.lognorm(0.85, loc=0.026, scale=0.138).pdf(u)
     # and distribution instances
     d_voff = Distribution(x_voff, f_voff)
     d_vdep = Distribution(x_vdep, f_vdep)
-    d_trot = Distribution(x_tkin, f_tkin)
+    d_tkin = Distribution(x_tkin, f_tkin)
     d_ntot = Distribution(x_ntot, f_ntot)
     d_sigm = Distribution(x_sigm, f_sigm)
     # interpolation values, transformed to the intervals:
@@ -231,7 +231,8 @@ class DataCube:
         return hdict
 
     def get_chan_width(self, cube):
-        axis = cube.with_spectral_unit('km/s').spectral_axis
+        axis = cube.with_spectral_unit(
+                'km/s', velocity_convention='radio').spectral_axis
         return abs(axis[1] - axis[0]).value
 
     def data_from_cube(self, cube):
@@ -422,8 +423,8 @@ class CubeFitter:
             'updInt': 2000,
     }
 
-    def __init__(self, stack, utrans, runner_cls, runner_kwargs=None, lnZ_thresh=11, ncomp_max=2,
-            mn_kwargs=None):
+    def __init__(self, stack, utrans, runner_cls, runner_kwargs=None,
+            lnZ_thresh=11, ncomp_max=2, mn_kwargs=None):
         self.stack = stack
         self.utrans = utrans
         self.runner_cls = runner_cls
@@ -440,7 +441,7 @@ class CubeFitter:
         #   See "Python and HDF5" pg. 116
         hdf = h5py.File(chunk_path, 'a')
         for (i_lon, i_lat) in zip(all_lon, all_lat):
-            spec_data, has_nans = self.stack.get_spectra(i_lon, i_lat)
+            spec_data, has_nans = self.stack.get_spec_data(i_lon, i_lat)
             if has_nans:
                 # FIXME replace with logging framework
                 print(f'-- ({i_lon}, {i_lat}) SKIP: has NaN values')
@@ -571,7 +572,7 @@ def aggregate_run_attributes(store):
     store.create_dataset('AICc', aicc_data.transpose(), group=dpath)
 
 
-def convolve_evidence(store, std_pix):
+def convolve_evidence(store, kernel):
     """
     Convolve the evidence maps and re-select the preferred number of model
     components. Products include:
@@ -581,10 +582,13 @@ def convolve_evidence(store, std_pix):
     Parameters
     ----------
     store : HdfStore
-    std_pix : number
-        Standard deviation of the convolution kernel in map pixels
+    kernel : number or `astropy.convolution.Kernel2D`
+        Either a kernel instance or a number defining the standard deviation in
+        map pixels of a Gaussian convolution kernel.
     """
     print(':: Convolving evidence maps')
+    if isinstance(kernel, (int, float)):
+        kernel = convolution.Gaussian2DKernel(kernel)
     hdf = store.hdf
     dpath = store.dpath
     ncomp_max = hdf.attrs['n_max_components']
@@ -596,7 +600,6 @@ def convolve_evidence(store, std_pix):
     cdata = np.zeros_like(data)
     # Spatially convolve evidence values. The convolution operator is
     # distributive, so C(Z1-Z0) should equal C(Z1)-C(Z0).
-    kernel = convolution.Gaussian2DKernel(std_pix)
     for i in range(data.shape[0]):
         cdata[i,:,:] = convolution.convolve_fft(data[i,:,:], kernel)
     # Re-compute N-best with convolved data
@@ -745,7 +748,7 @@ def aggregate_run_pdfs(store, par_bins=None):
     store.create_dataset('post_pdfs', histdata.transpose(), group=dpath)
 
 
-def convolve_post_pdfs(store, std_pix):
+def convolve_post_pdfs(store, kernel):
     """
     Convolve the evidence maps and re-select the preferred number of model
     components. Products include:
@@ -754,10 +757,13 @@ def convolve_post_pdfs(store, std_pix):
     Parameters
     ----------
     store : HdfStore
-    std_pix : number
-        Standard deviation of the convolution kernel in map pixels
+    kernel : number or `astropy.convolution.Kernel2D`
+        Either a kernel instance or a number defining the standard deviation in
+        map pixels of a Gaussian convolution kernel.
     """
     print(':: Convolving posterior PDFs')
+    if isinstance(kernel, (int, float)):
+        kernel = convolution.Gaussian2DKernel(kernel)
     hdf = store.hdf
     dpath = store.dpath
     ncomp_max = hdf.attrs['n_max_components']
@@ -766,7 +772,6 @@ def convolve_post_pdfs(store, std_pix):
     cdata = np.zeros_like(data)
     # Spatially convolve the (l, b) map for every (model, parameter,
     # histogram) set.
-    kernel = convolution.Gaussian2DKernel(std_pix)
     cart_prod = itertools.product(
             range(data.shape[0]),
             range(data.shape[1]),
@@ -826,7 +831,7 @@ def quantize_conv_marginals(store):
     store.create_dataset('conv_marginals', margs, group=dpath)
 
 
-def deblend_hf_intensity(store, stack):
+def deblend_hf_intensity(store, stack, runner):
     """
     Calculate integrated and peak intensity maps from the maximum a posteriori
     parameter values. Also produce spectral cubes that have had the hyperfine
@@ -840,6 +845,7 @@ def deblend_hf_intensity(store, stack):
     ----------
     store : HdfStore
     stack : CubeStack
+    runner : Runner
     """
     print(':: Deblending HF structure in intensity map')
     hdf = store.hdf
@@ -865,17 +871,12 @@ def deblend_hf_intensity(store, stack):
             range(pmap.shape[3]),
     )
     cube_shape = stack.spatial_shape
-    test_pix = cube_shape[0]//2, cube_shape[1]//2
-    (spec11, spec22), _ = stack.get_spectra(*test_pix)
-    # FIXME Remove hard-coding on ammonia
     for i_l, i_b, i_m in cart_prod:
         params = pmap[i_l,i_b,:,i_m].copy()  # make contiguous
-        amm11_predict(spec11, params)
-        amm22_predict(spec22, params)
-        pkint[ i_l,i_b,i_m,0] = spec11.max_spec
-        pkint[ i_l,i_b,i_m,1] = spec22.max_spec
-        intint[i_l,i_b,i_m,0] = spec11.sum_spec
-        intint[i_l,i_b,i_m,1] = spec22.sum_spec
+        runner.loglikelihood(params)
+        for j, spec in enumerate(runner.get_spectra()):
+            pkint[ i_l,i_b,i_m,j] = spec.max_spec
+            intint[i_l,i_b,i_m,j] = spec.sum_spec
     # scale intensities by velocity channel width to put in K*km/s
     intint[:,:,:,0] *= stack.cubes[0].dv
     intint[:,:,:,1] *= stack.cubes[1].dv

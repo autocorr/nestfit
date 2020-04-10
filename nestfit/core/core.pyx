@@ -256,7 +256,7 @@ cdef class SpacedPrior(Prior):
         """
         self.prior_indep = prior_indep
         self.prior_depen = prior_depen
-        self.p_ix = prior_indep.p_ix
+        self.p_ix = self.prior_indep.p_ix
         self.n_param = 1
 
     cdef void interp(self, double *utheta, long n):
@@ -460,6 +460,9 @@ cdef class Runner:
         cdef double lnL
         self.c_loglikelihood(&utheta[0], &lnL)
         return lnL
+
+    def get_spectra(self):
+        return self.spectra
 
 
 cdef class Dumper:
