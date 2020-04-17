@@ -104,7 +104,6 @@ cdef class Distribution:
         y_lo = self.cdf[i_lo]
         y_hi = self.cdf[i_hi]
         slope = (y_hi - y_lo) / self.dx
-        print(i_lo, i_hi, x_lo, self.xax[i_hi], y_lo, y_hi, slope)  # XXX
         return 1 / slope * (u - y_lo) + x_lo
 
     cdef void cdf_over_interval(self, double x_lo, double x_hi):
