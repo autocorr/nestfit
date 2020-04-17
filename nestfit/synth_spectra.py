@@ -43,7 +43,8 @@ FAKE_KWDS = {
 class SyntheticSpectrum:
     model_name = 'ammonia'
 
-    def __init__(self, xarr, params, noise=0.03, vsys=0, trans_id=1, set_seed=False):
+    def __init__(self, xarr, params, noise=0.03, vsys=0, trans_id=1,
+            set_seed=False, cold=False, lte=False):
         """
         Construct a mixture of ammonia model spectra given parameters:
             voff : centroid velocity offset from zero
@@ -66,6 +67,10 @@ class SyntheticSpectrum:
             Transition ID
         set_seed : bool, default=False
             If `True` will use a default seed of 5 for the np.random module.
+        cold : bool, default=False
+            Use the Swift approximation, tkin is used instead of trot
+        lte : bool, default=False
+            Set tex equal to trot (which will be computed from tkin if `cold` set)
         """
         if set_seed:
             np.random.seed(5)
@@ -82,7 +87,9 @@ class SyntheticSpectrum:
         self.noise = noise
         self.vsys = vsys
         self.trans_id = trans_id
-        self.size  = xarr.shape[0]
+        self.cold = cold
+        self.lte = lte
+        self.size = xarr.shape[0]
         self.ncomp = params.shape[0] // 6
         self.components = self.calc_profiles()
         self.sum_spec = self.components.sum(axis=0)
@@ -91,7 +98,22 @@ class SyntheticSpectrum:
 
     def calc_profiles(self, **kwargs):
         n = self.ncomp
-        models = np.array([
+        if self.cold:
+            models = np.array([
+                pyspeckit.spectrum.models.ammonia.cold_ammonia(
+                    self.xarr,
+                    self.params[n+i],  # tkin
+                    xoff_v=self.params[    i]+self.vsys,
+                    tex   =None if self.lte else self.params[2*n+i],
+                    ntot  =self.params[3*n+i],
+                    width =self.params[4*n+i],
+                    fortho=self.params[5*n+i],
+                    **kwargs,
+                )
+                for i in range(self.ncomp)
+            ])
+        else:
+            models = np.array([
                 pyspeckit.spectrum.models.ammonia.ammonia(
                     self.xarr,
                     xoff_v=self.params[    i]+self.vsys,
@@ -103,7 +125,7 @@ class SyntheticSpectrum:
                     **kwargs,
                 )
                 for i in range(self.ncomp)
-        ])
+            ])
         return models
 
     def calc_noise(self):

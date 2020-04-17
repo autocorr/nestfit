@@ -606,6 +606,21 @@ cdef class AmmoniaRunner(Runner):
             c_amm_predict(spec, utheta, self.ndim, self.cold, self.lte)
             lnL[0] += spec.c_loglikelihood()
 
+    def get_spectra(self):
+        return np.array(self.spectra)
+
+    def predict(self, double[::1] params):
+        cdef:
+            long i
+            AmmoniaSpectrum spec
+        if params.shape[0] != self.ndim:
+            ncomp = self.ncomp
+            shape = params.shape[0]
+            raise ValueError(f'Invalid shape for ncomp={ncomp}: {shape}')
+        for i in range(self.n_spec):
+            spec = self.spectra[i]
+            c_amm_predict(spec, &params[0], self.ndim, self.cold, self.lte)
+
 
 ##############################################################################
 #                                 Tests

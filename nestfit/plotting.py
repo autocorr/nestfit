@@ -430,13 +430,14 @@ def plot_3d_volume(sp, outname='volume_field_contour'):
     mvi.clf()
 
 
-def plot_amm_specfit(sp, stack, pix, n_model=1, outname='specfit'):
+def plot_amm_specfit(sp, stack, pix, n_model=1, outname='specfit', cold=False):
     lon_pix, lat_pix = pix
     group = sp.store.hdf[f'/pix/{lon_pix}/{lat_pix}/{n_model}']
-    params = group['map_params'][...]
+    params = group['bestfit_params'][...]
+    print(params)
     obs_spec = stack.get_arrays(*pix)
     xarrs = get_amm_psk_xarrs(stack)
-    syn_spec = [SyntheticSpectrum(x, params) for x in xarrs]
+    syn_spec = [SyntheticSpectrum(x, params, cold=cold) for x in xarrs]
     fig = plt.figure(figsize=(4, 5))
     ax0 = plt.subplot2grid((3, 1), (0, 0), rowspan=2)
     ax1 = plt.subplot2grid((3, 1), (2, 0))

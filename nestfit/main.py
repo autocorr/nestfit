@@ -113,35 +113,35 @@ def get_synth_priors(size=500):
     """
     u = np.linspace(0, 1, size)
     # prior distribution x axes
-    # 0 voff [-2.5,  2.5] km/s  (centered on vsys)
-    #   vdep [-2.5,  2.5] km/s
-    # 1 tkin [ 8.0, 25.0] K
-    # 2 tex  [ 8.0, 25.0] K (in LTE, fixed to tkin)
-    # 3 ntot [13.0, 14.5] log(cm^-2)
-    # 4 sigm [ 0.0,  2.0] km/s  (scaled log-normal)
-    x_voff =  5.00 * u -  2.50
-    x_vdep =  5.00 * u -  2.50
-    x_tkin = 17.00 * u +  8.00
-    x_ntot =  1.50 * u + 13.00
-    x_sigm =  2.00 * u
+    # 0 voff [-5.10,  5.10] km/s
+    # 1 tkin [ 7.90, 25.10] K
+    # 2 tex  [ 7.90, 25.10] K (in LTE, fixed to tkin)
+    # 3 ntot [12.95, 14.55] log(cm^-2)
+    # 4 sigm [ 0.07,  2.10] km/s  (scaled log-normal)
+    x_voff = 10.20 * u -  5.10
+    x_tkin = 17.20 * u +  7.90
+    x_ntot =  1.60 * u + 12.95
+    x_sigm =  2.03 * u +  0.07
     # prior PDFs values
     f_voff = np.ones_like(u) / size
-    f_vdep = np.ones_like(u) / size
     f_tkin = np.ones_like(u) / size
     f_ntot = np.ones_like(u) / size
-    f_sigm = sp.stats.lognorm(0.85, loc=0.026, scale=0.138).pdf(u)
+    f_sigm = sp.stats.lognorm(0.97, scale=0.135).pdf(u)
     # and distribution instances
     d_voff = Distribution(x_voff, f_voff)
-    d_vdep = Distribution(x_vdep, f_vdep)
     d_tkin = Distribution(x_tkin, f_tkin)
     d_ntot = Distribution(x_ntot, f_ntot)
     d_sigm = Distribution(x_sigm, f_sigm)
     # interpolation values, transformed to the intervals:
+    fwhm = 2 * np.sqrt(2 * np.log(2))
     priors = np.array([
-            SpacedPrior(Prior(d_voff, 0), Prior(d_vdep, 0)),
+            ResolvedWidthPrior(
+                Prior(d_voff, 0),
+                Prior(d_sigm, 4),
+                scale=1/fwhm,
+            ),
             DuplicatePrior(d_tkin, 1, 2),
             Prior(d_ntot, 3),
-            Prior(d_sigm, 4),
             ConstantPrior(0, 5),
     ])
     return PriorTransformer(priors)
@@ -280,7 +280,7 @@ class CubeStack:
     def get_arrays(self, i_lon, i_lat):
         arrays = []
         for dcube in self.cubes:
-            arr = dcube.get_array(i_lon, i_lat)
+            xarr, arr, *_ = dcube.get_spec_data(i_lon, i_lat)
             arrays.append(arr)
         return arrays
 
@@ -473,6 +473,7 @@ class CubeFitter:
             group.attrs['i_lon'] = i_lon
             group.attrs['i_lat'] = i_lat
             group.attrs['nbest'] = nbest
+        hdf.flush()
         hdf.close()
 
     def fit_cube(self, store_name='run/test_cube', nproc=1):
@@ -847,6 +848,7 @@ def deblend_hf_intensity(store, stack, runner):
     stack : CubeStack
     runner : Runner
     """
+    assert runner.ncomp == 1
     print(':: Deblending HF structure in intensity map')
     hdf = store.hdf
     dpath = store.dpath
@@ -873,7 +875,9 @@ def deblend_hf_intensity(store, stack, runner):
     cube_shape = stack.spatial_shape
     for i_l, i_b, i_m in cart_prod:
         params = pmap[i_l,i_b,:,i_m].copy()  # make contiguous
-        runner.loglikelihood(params)
+        if np.any(np.isnan(params)):
+            continue
+        runner.predict(params)
         for j, spec in enumerate(runner.get_spectra()):
             pkint[ i_l,i_b,i_m,j] = spec.max_spec
             intint[i_l,i_b,i_m,j] = spec.sum_spec
@@ -896,12 +900,12 @@ def deblend_hf_intensity(store, stack, runner):
     store.create_dataset('hf_deblended', hfdb.transpose(), group=dpath)
 
 
-def postprocess_run(store, stack, par_bins, std_pix=None):
+def postprocess_run(store, stack, par_bins=None, kernel=None):
     aggregate_run_attributes(store)
-    convolve_evidence(store, std_pix)
+    convolve_evidence(store, kernel)
     aggregate_run_products(store)
     aggregate_run_pdfs(store, par_bins=par_bins)
-    convolve_post_pdfs(store, std_pix)
+    convolve_post_pdfs(store, kernel)
     quantize_conv_marginals(store)
     deblend_hf_intensity(store, stack)
 

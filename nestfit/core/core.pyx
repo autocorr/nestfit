@@ -74,8 +74,12 @@ cdef class Distribution:
         cdef:
             long i, i_lo, i_hi
             double x_lo, x_hi, y_lo, y_hi, slope
-        if u < self.cdf[0]:
-            return self.xmin
+        # If `u == 0` then leading zeros in the CDF will result in the
+        # bisection method (rounding down) will result in i -> 0, which will be
+        # incorrect. So, set `u` to a small positive number that will be
+        # neglible in the interpolation.
+        if u <= self.cdf[0]:
+            u = 1e-64
         # Bi-section method to find index of the nearest value in CDF
         i_lo = 0
         i_hi = self.size
@@ -100,6 +104,7 @@ cdef class Distribution:
         y_lo = self.cdf[i_lo]
         y_hi = self.cdf[i_hi]
         slope = (y_hi - y_lo) / self.dx
+        print(i_lo, i_hi, x_lo, self.xax[i_hi], y_lo, y_hi, slope)  # XXX
         return 1 / slope * (u - y_lo) + x_lo
 
     cdef void cdf_over_interval(self, double x_lo, double x_hi):
@@ -462,7 +467,7 @@ cdef class Runner:
         return lnL
 
     def get_spectra(self):
-        return self.spectra
+        return np.array(self.spectra)
 
 
 cdef class Dumper:
