@@ -113,20 +113,20 @@ def get_synth_priors(size=500):
     """
     u = np.linspace(0, 1, size)
     # prior distribution x axes
-    # 0 voff [-5.10,  5.10] km/s
-    # 1 tkin [ 7.90, 25.10] K
-    # 2 tex  [ 7.90, 25.10] K (in LTE, fixed to tkin)
-    # 3 ntot [12.95, 14.55] log(cm^-2)
-    # 4 sigm [ 0.07,  2.10] km/s  (scaled log-normal)
-    x_voff = 10.20 * u -  5.10
-    x_tkin = 17.20 * u +  7.90
-    x_ntot =  1.60 * u + 12.95
-    x_sigm =  2.03 * u +  0.07
+    # 0 voff [-5.100,  5.10] km/s
+    # 1 tkin [ 7.900, 25.10] K
+    # 2 tex  [ 7.900, 25.10] K (in LTE, fixed to tkin)
+    # 3 ntot [12.950, 14.55] log(cm^-2)
+    # 4 sigm [ 0.075,  2.10] km/s  (scaled log-normal)
+    x_voff = 10.200 * u -  5.10
+    x_tkin = 17.200 * u +  7.90
+    x_ntot =  1.600 * u + 12.95
+    x_sigm =  2.025 * u +  0.075
     # prior PDFs values
     f_voff = np.ones_like(u) / size
     f_tkin = np.ones_like(u) / size
     f_ntot = np.ones_like(u) / size
-    f_sigm = sp.stats.lognorm(0.97, scale=0.135).pdf(u)
+    f_sigm = sp.stats.lognorm(1.0, scale=0.136).pdf(u)
     # and distribution instances
     d_voff = Distribution(x_voff, f_voff)
     d_tkin = Distribution(x_tkin, f_tkin)
@@ -476,7 +476,7 @@ class CubeFitter:
         hdf.flush()
         hdf.close()
 
-    def fit_cube(self, store_name='run/test_cube', nproc=1):
+    def fit_cube(self, store_name='run/test_cube', nproc=1, timeout=None):
         n_chan, n_lat, n_lon = self.stack.shape
         store = HdfStore(store_name, nchunks=nproc)
         store.insert_header(self.stack)
@@ -499,7 +499,7 @@ class CubeFitter:
             for proc in procs:
                 proc.start()
             for proc in procs:
-                proc.join()
+                proc.join(timeout=timeout)
         # link all of the HDF5 files together
         store.link_files()
         store.close()
