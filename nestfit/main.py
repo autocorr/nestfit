@@ -631,6 +631,7 @@ def aggregate_run_products(store):
     into dense arrays of the product values. Products include:
         * 'marg_quantiles' (M)
         * 'nbest_MAP' (m, p, b, l) -- cube of maximum a posteriori values
+        * 'nbest_bestfit' (m, p, b, l) -- cube of maximum likelihood values
         * 'nbest_marginals' (m, p, M, b, l) -- marginal quantiles cube
 
     Parameters
@@ -651,10 +652,10 @@ def aggregate_run_products(store):
     marg_quan = test_group.attrs['marg_quantiles']
     n_margs   = len(marg_quan)
     # dimensions (l, b, p, m) for MAP-parameter values
-    #   (latitude, longitude, parameter, model)
     mapdata = nans((n_lon, n_lat, n_params, ncomp_max))
+    # dimensions (l, b, p, m) for bestfit parameter values
+    bfdata = nans((n_lon, n_lat, n_params, ncomp_max))
     # dimensions (l, b, M, p, m) for posterior distribution marginals
-    #   (latitude, longitude, marginal, parameter, model)
     # NOTE in C order, the right-most index varies the fastest
     pardata = nans((n_lon, n_lat, n_margs, n_params, ncomp_max))
     # aggregate marginals into pardata
@@ -670,6 +671,10 @@ def aggregate_run_products(store):
         p_shape = (n_params, nbest)
         mapvs = nb_group['map_params'][...].reshape(p_shape)
         mapdata[i_lon,i_lat,:p_shape[0],:p_shape[1]] = mapvs
+        # convert bestfit params from 1D array to 2D for:
+        #   (p*m) -> (p, m)
+        bfvs = nb_group['bestfit_params'][...].reshape(p_shape)
+        bfdata[i_lon,i_lat,:p_shape[0],:p_shape[1]] = bfvs
         # convert the marginals output 2D array to 3D for:
         #   (M, p*m) -> (M, p, m)
         m_shape = (n_margs, n_params, nbest)
@@ -679,6 +684,8 @@ def aggregate_run_products(store):
     store.create_dataset('marg_quantiles', marg_quan, group=dpath)
     # transpose to dimensions (m, p, b, l)
     store.create_dataset('nbest_MAP', mapdata.transpose(), group=dpath)
+    # transpose to dimensions (m, p, b, l)
+    store.create_dataset('nbest_bestfit', bfdata.transpose(), group=dpath)
     # transpose to dimensions (m, p, M, b, l)
     store.create_dataset('nbest_marginals', pardata.transpose(), group=dpath)
 
