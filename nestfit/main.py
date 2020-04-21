@@ -602,7 +602,7 @@ def convolve_evidence(store, kernel):
     # Spatially convolve evidence values. The convolution operator is
     # distributive, so C(Z1-Z0) should equal C(Z1)-C(Z0).
     for i in range(data.shape[0]):
-        cdata[i,:,:] = convolution.convolve_fft(data[i,:,:], kernel)
+        cdata[i,:,:] = convolution.convolve(data[i,:,:], kernel, boundary='extend')
     # Re-compute N-best with convolved data
     conv_nbest = np.full(cdata[0].shape, 0, dtype=np.int32)
     for i in range(ncomp_max):
@@ -689,7 +689,7 @@ def aggregate_run_pdfs(store, par_bins=None):
     samples into one-dimensional marginalized PDFs of the parameter posteriors.
     Products include:
         * 'pdf_bins' (p, h)
-        * 'post_pdfs' (m, p, h, b, l)
+        * 'post_pdfs' (r, m, p, h, b, l)
 
     Parameters
     ----------
@@ -705,7 +705,6 @@ def aggregate_run_pdfs(store, par_bins=None):
     n_lon = hdf.attrs['naxis1']
     n_lat = hdf.attrs['naxis2']
     ncomp_max = hdf.attrs['n_max_components']
-    nb_data = hdf[f'{dpath}/conv_nbest'][...].transpose()
     test_group = hdf[f'pix/{n_lon//2}/{n_lat//2}/1']  # FIXME may not exist
     n_params  = test_group.attrs['n_params']
     # If no bins set, set bins from linear intervals of the posteriors
@@ -723,37 +722,42 @@ def aggregate_run_pdfs(store, par_bins=None):
         ])
     else:
         n_bins = par_bins.shape[1]
-    # dimensions (l, b, h, p, m) for histogram values
-    #   (longitude, latitude, histogram-value, parameter, model)
-    histdata = nans((n_lon, n_lat, n_bins-1, n_params, ncomp_max))
+    # dimensions (l, b, r, p, m, h) for histogram values
+    #   (longitude, latitude, run, parameter, model, histogram-value)
+    histdata = nans((n_lon, n_lat, ncomp_max, n_params, ncomp_max, n_bins-1))
     for group in store.iter_pix_groups():
-        i_lon = group.attrs['i_lon']
-        i_lat = group.attrs['i_lat']
-        nbest = nb_data[i_lon,i_lat]
-        if nbest == 0:
-            continue
-        nb_group = group[f'{nbest}']
-        post = nb_group['posteriors']
-        for i_par, bins in enumerate(par_bins):
-            for j_par in range(nbest):
-                ix = i_par * nbest + j_par
-                hist, _ = np.histogram(
-                        post[:,ix], bins=bins, density=True,
-                )
-                histdata[i_lon,i_lat,:,i_par,j_par] = hist
+        i_l = group.attrs['i_lon']
+        i_b = group.attrs['i_lat']
+        for i_r in range(ncomp_max):
+            n_run = i_r + 1
+            try:
+                run_group = group[f'{n_run}']
+            except KeyError:
+                continue
+            post = run_group['posteriors']
+            for i_p, bins in enumerate(par_bins):
+                for i_m in range(n_run):
+                    ix = i_p * n_run + i_m
+                    hist, _ = np.histogram(post[:,ix], bins=bins)
+                    histdata[i_l,i_b,i_r,i_p,i_m,:] = hist
+    # ensure the PDFs are normalized
+    histdata /= np.nansum(histdata, axis=5, keepdims=True)
     # convert bin edges to bin mid-points
     # dimensions (m, h)
     bin_mids = (par_bins[:,:-1] + par_bins[:,1:]) / 2
     store.create_dataset('pdf_bins', bin_mids, group=dpath)
-    # transpose to dimensions (m, p, h, b, l)
-    store.create_dataset('post_pdfs', histdata.transpose(), group=dpath)
+    # transpose from (l, b, r, p, m, h)
+    #                 0  1  2  3  4  5
+    #             to (r, m, p, h, b, l)
+    #                 2  4  3  5  1  0
+    histdata = histdata.transpose((2, 4, 3, 5, 1, 0))
+    store.create_dataset('post_pdfs', histdata, group=dpath)
 
 
 def convolve_post_pdfs(store, kernel):
     """
-    Convolve the evidence maps and re-select the preferred number of model
-    components. Products include:
-        * 'conv_post_pdfs' (m, p, h, b, l)
+    Spatially convolve the model posterior PDF. Products include:
+        * 'conv_post_pdfs' (r, m, p, h, b, l)
 
     Parameters
     ----------
@@ -768,22 +772,34 @@ def convolve_post_pdfs(store, kernel):
     hdf = store.hdf
     dpath = store.dpath
     ncomp_max = hdf.attrs['n_max_components']
-    # dimensions (m, p, h, b, l)
+    # dimensions (r, m, p, h, b, l)
     data = hdf[f'{dpath}/post_pdfs'][...]
     cdata = np.zeros_like(data)
+    # dimensions (m, b, l)
+    evid = hdf[f'{dpath}/evidence'][...]
+    # dimensions (b, l)
+    nbest = hdf[f'{dpath}/conv_nbest'][...]
+    # compute difference between preferred model number and zero.
+    z_best = np.take_along_axis(evid, nbest[np.newaxis,...], axis=0)
+    d_evid = z_best[0,:,:] - evid[0,:,:]
+    # weight the PDF distributions by the evidence delta
+    data *= d_evid.reshape((1, 1, 1, 1, *d_evid.shape))
+    data /= np.nansum(d_evid)
     # Spatially convolve the (l, b) map for every (model, parameter,
     # histogram) set.
     cart_prod = itertools.product(
-            range(data.shape[0]),
-            range(data.shape[1]),
-            range(data.shape[2]),
+            range(data.shape[0]),  # r
+            range(data.shape[1]),  # m
+            range(data.shape[2]),  # p
+            range(data.shape[3]),  # h
     )
-    # TODO weight the marginal distributions by their lnZ
-    # get evidence cube, vector multiply across `data` before convolution,
-    # and then divide `data` by convolved evidence cube to normalize.
-    for i_m, i_p, i_h in cart_prod:
-        cdata[i_m,i_p,i_h,:,:] = convolution.convolve_fft(
-                data[i_m,i_p,i_h,:,:], kernel)
+    for i_r, i_m, i_p, i_h in cart_prod:
+        if i_m > i_r:
+            continue
+        cdata[i_r,i_m,i_p,i_h,:,:] = convolution.convolve_fft(
+                data[i_r,i_m,i_p,i_h,:,:], kernel)
+    # ensure the PDFs are normalized
+    cdata /= np.nansum(cdata, axis=3, keepdims=True)
     # re-mask the NaN positions
     cdata[np.isnan(data)] = np.nan
     store.create_dataset('conv_post_pdfs', cdata, group=dpath)
@@ -793,7 +809,7 @@ def quantize_conv_marginals(store):
     """
     Calculate weighted quantiles of convolved posterior marginal distributions.
     Products include:
-        * 'conv_marginals' (m, p, M, b, l)
+        * 'conv_marginals' (r, m, p, M, b, l)
 
     Parameters
     ----------
@@ -806,29 +822,29 @@ def quantize_conv_marginals(store):
     bins = hdf[f'{dpath}/pdf_bins'][...]
     # dimensions (M)
     quan = hdf[f'{dpath}/marg_quantiles'][...]
-    # dimensions (m, p, h, b, l)
-    #   transposed to (m, p, b, l, h)
+    # dimensions (r, m, p, h, b, l)
+    #   transposed to (r, m, p, b, l, h)
     data = hdf[f'{dpath}/conv_post_pdfs'][...]
-    data = data.transpose((0, 1, 3, 4, 2))
-    data = np.cumsum(data, axis=4) / np.sum(data, axis=4, keepdims=True)
-    # dimensions (m, p, b, l, M)
+    data = data.transpose((0, 1, 2, 4, 5, 3))
+    data = np.cumsum(data, axis=5) / np.sum(data, axis=5, keepdims=True)
+    # dimensions (r, m, p, b, l, M)
     margs_shape = list(data.shape)
-    margs_shape[-1] = len(quan)
+    margs_shape[-1] = len(quan)  # h -> M
     margs = nans(margs_shape)
     # requires creating a new iterator each loop otherwise will run out
     def make_cart_prod():
         return itertools.product(
-                range(data.shape[0]),
-                range(data.shape[2]),
-                range(data.shape[3]),
+                range(data.shape[0]),  # r
+                range(data.shape[1]),  # m
+                range(data.shape[3]),  # b
+                range(data.shape[4]),  # l
         )
     for i_p, x in enumerate(bins):
-        # convert bin edges to bin centers
-        for i_m, i_b, i_l in make_cart_prod():
-            y = data[i_m,i_p,i_b,i_l]
-            margs[i_m,i_p,i_b,i_l,:] = np.interp(quan, y, x)
-    # transpose back to conventional shape (m, p, h, b, l)
-    margs = margs.transpose((0, 1, 4, 2, 3))
+        for i_r, i_m, i_b, i_l in make_cart_prod():
+            y = data[i_r,i_m,i_p,i_b,i_l]
+            margs[i_r,i_m,i_p,i_b,i_l,:] = np.interp(quan, y, x)
+    # transpose back to conventional shape (r, m, p, M, b, l)
+    margs = margs.transpose((0, 1, 2, 5, 3, 4))
     store.create_dataset('conv_marginals', margs, group=dpath)
 
 
