@@ -278,6 +278,33 @@ cdef class SpacedPrior(Prior):
             utheta[ix+i] = v
 
 
+cdef class CenSepPrior(Prior):
+    cdef:
+        Prior prior_cen, prior_sep
+
+    def __init__(self, prior_cen, prior_sep):
+        self.prior_cen = prior_cen
+        self.prior_sep = prior_sep
+        self.p_ix = self.prior_cen.p_ix
+        self.n_param = 1
+
+    cdef void interp(self, double *utheta, long n):
+        cdef:
+            long i
+            long ix = self.p_ix * n
+            double vcen, vsep
+        vcen = self.prior_cen.dist.ppf_interp(utheta[ix])
+        if n == 1:
+            utheta[ix] = vcen
+        elif n == 2:
+            vsep = self.prior_sep.dist.ppf_interp(utheta[ix+1])
+            utheta[ix  ] = vcen - 0.5 * vsep
+            utheta[ix+1] = vcen + 0.5 * vsep
+        else:
+            # FIXME need to parametrize higher order systems
+            pass
+
+
 cdef class ResolvedWidthPrior(Prior):
     cdef:
         double scale, sep_scale

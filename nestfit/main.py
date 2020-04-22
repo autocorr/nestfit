@@ -28,8 +28,8 @@ from astropy.io import fits
 from nestfit.synth_spectra import get_test_spectra
 from nestfit.core.core import (
         Prior, ConstantPrior, DuplicatePrior, OrderedPrior, SpacedPrior,
-        ResolvedWidthPrior, Distribution, PriorTransformer, Dumper,
-        run_multinest,
+        CenSepPrior, ResolvedWidthPrior,
+        Distribution, PriorTransformer, Dumper, run_multinest,
 )
 from nestfit.models.ammonia import (
         amm_predict, AmmoniaSpectrum, AmmoniaRunner,
@@ -113,35 +113,47 @@ def get_synth_priors(size=500):
     """
     u = np.linspace(0, 1, size)
     # prior distribution x axes
-    # 0 voff [-5.100,  5.10] km/s
+    # 0 voff [-3.900,  3.90] km/s  (center of two comps)
+    #   vsep [ 0.130,  2.70] km/s  (sep between comps)
     # 1 tkin [ 7.900, 25.10] K
-    # 2 tex  [ 7.900, 25.10] K (in LTE, fixed to tkin)
+    # 2 tex  [ 7.900, 25.10] K  (fixed to tkin in LTE)
     # 3 ntot [12.950, 14.55] log(cm^-2)
     # 4 sigm [ 0.075,  2.10] km/s  (scaled log-normal)
-    x_voff = 10.200 * u -  5.10
+    #x_voff = 11.000 * u -  5.5
+    x_voff =  7.800 * u -  3.90
+    x_vsep =  2.570 * u +  0.13
     x_tkin = 17.200 * u +  7.90
     x_ntot =  1.600 * u + 12.95
     x_sigm =  2.025 * u +  0.075
     # prior PDFs values
     f_voff = np.ones_like(u) / size
+    f_vsep = np.ones_like(u) / size
     f_tkin = np.ones_like(u) / size
     f_ntot = np.ones_like(u) / size
     f_sigm = sp.stats.lognorm(1.0, scale=0.136).pdf(u)
     # and distribution instances
     d_voff = Distribution(x_voff, f_voff)
+    d_vsep = Distribution(x_vsep, f_vsep)
     d_tkin = Distribution(x_tkin, f_tkin)
     d_ntot = Distribution(x_ntot, f_ntot)
     d_sigm = Distribution(x_sigm, f_sigm)
     # interpolation values, transformed to the intervals:
     fwhm = 2 * np.sqrt(2 * np.log(2))
     priors = np.array([
-            ResolvedWidthPrior(
-                Prior(d_voff, 0),
-                Prior(d_sigm, 4),
-                scale=1/fwhm,
-            ),
+            # Using resolved width
+            #ResolvedWidthPrior(
+            #    Prior(d_voff, 0),
+            #    Prior(d_sigm, 4),
+            #    scale=1/fwhm,
+            #),
+            #DuplicatePrior(d_tkin, 1, 2),
+            #Prior(d_ntot, 3),
+            #ConstantPrior(0, 5),
+            # Using center-separation prior
+            CenSepPrior(Prior(d_voff, 0), Prior(d_vsep, 0)),
             DuplicatePrior(d_tkin, 1, 2),
             Prior(d_ntot, 3),
+            Prior(d_sigm, 4),
             ConstantPrior(0, 5),
     ])
     return PriorTransformer(priors)
