@@ -9,7 +9,7 @@ cdef class Distribution:
 
     cdef double ppf_interp(self, double u)
     cdef double cdf_interp(self, double u)
-    cdef void cdf_over_interval(self, double x_lo, double x_hi)
+    cdef void cdf_over_interval(self, double x_lo, double x_hi, double sfact)
 
 
 cdef class Prior:

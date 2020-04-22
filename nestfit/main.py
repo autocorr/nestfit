@@ -119,8 +119,8 @@ def get_synth_priors(size=500):
     # 2 tex  [ 7.900, 25.10] K  (fixed to tkin in LTE)
     # 3 ntot [12.950, 14.55] log(cm^-2)
     # 4 sigm [ 0.075,  2.10] km/s  (scaled log-normal)
-    #x_voff = 11.000 * u -  5.5
-    x_voff =  7.800 * u -  3.90
+    x_voff = 10.200 * u -  5.1
+    #x_voff =  7.800 * u -  3.90
     x_vsep =  2.570 * u +  0.13
     x_tkin = 17.200 * u +  7.90
     x_ntot =  1.600 * u + 12.95
@@ -140,21 +140,21 @@ def get_synth_priors(size=500):
     # interpolation values, transformed to the intervals:
     fwhm = 2 * np.sqrt(2 * np.log(2))
     priors = np.array([
-            # Using resolved width
-            #ResolvedWidthPrior(
-            #    Prior(d_voff, 0),
-            #    Prior(d_sigm, 4),
-            #    scale=1/fwhm,
-            #),
-            #DuplicatePrior(d_tkin, 1, 2),
-            #Prior(d_ntot, 3),
-            #ConstantPrior(0, 5),
-            # Using center-separation prior
-            CenSepPrior(Prior(d_voff, 0), Prior(d_vsep, 0)),
+            ## Using resolved width
+            ResolvedWidthPrior(
+                Prior(d_voff, 0),
+                Prior(d_sigm, 4),
+                scale=1/fwhm,
+            ),
             DuplicatePrior(d_tkin, 1, 2),
             Prior(d_ntot, 3),
-            Prior(d_sigm, 4),
             ConstantPrior(0, 5),
+            ## Using center-separation prior
+            #CenSepPrior(Prior(d_voff, 0), Prior(d_vsep, 0)),
+            #DuplicatePrior(d_tkin, 1, 2),
+            #Prior(d_ntot, 3),
+            #Prior(d_sigm, 4),
+            #ConstantPrior(0, 5),
     ])
     return PriorTransformer(priors)
 
@@ -511,7 +511,7 @@ class CubeFitter:
             for proc in procs:
                 proc.start()
             for proc in procs:
-                proc.join(timeout=timeout)
+                proc.join(timeout)
         # link all of the HDF5 files together
         store.link_files()
         store.close()
@@ -955,8 +955,26 @@ def test_nested(ncomp=2, prefix='test'):
     amm1 = spectra[0]
     amm2 = spectra[1]
     utrans = get_irdc_priors(vsys=0)
-    with h5py.File('test.hdf', 'a', driver='core') as hdf:
+    hdf_filen = 'test.hdf'
+    if Path(hdf_filen).exists():
+        os.remove(hdf_filen)
+    with h5py.File(hdf_filen, 'a', driver='core') as hdf:
         group = hdf.require_group(f'{prefix}/{ncomp}')
+        dumper = Dumper(group)
+        runner = AmmoniaRunner(spectra, utrans, ncomp)
+        run_multinest(runner, dumper, nlive=100, seed=5, tol=1.0, efr=0.3,
+                updInt=2000)
+    return synspec, spectra, runner
+
+
+def profile_nested(ncomp=2):
+    synspec = get_test_spectra()
+    spectra = np.array([syn.to_ammspec() for syn in synspec])
+    amm1 = spectra[0]
+    amm2 = spectra[1]
+    utrans = get_irdc_priors(vsys=0)
+    with h5py.File('empty.hdf', 'a', driver='core') as hdf:
+        group = hdf.require_group(f'test/{ncomp}')
         dumper = Dumper(group, no_dump=True)
         runner = AmmoniaRunner(spectra, utrans, ncomp)
         # transform and spectral prediction
@@ -975,7 +993,6 @@ def test_nested(ncomp=2, prefix='test'):
         for _ in range(20):
             run_multinest(runner, dumper, nlive=100, seed=-1, tol=1.0, efr=0.3,
                     updInt=2000)
-    return synspec, spectra, runner
 
 
 def get_test_cubestack(full=False):

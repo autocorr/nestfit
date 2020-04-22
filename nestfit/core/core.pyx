@@ -106,9 +106,10 @@ cdef class Distribution:
         slope = (y_hi - y_lo) / self.dx
         return 1 / slope * (u - y_lo) + x_lo
 
-    cdef void cdf_over_interval(self, double x_lo, double x_hi):
+    cdef void cdf_over_interval(self, double x_lo, double x_hi, double sfact):
         cdef:
             long i, i_lo, i_hi
+            double delta_i, scale
             double csum = 0.0
         # If this occurs, it's almost certainly a bug, but guard against it for
         # safety.
@@ -134,13 +135,26 @@ cdef class Distribution:
             self.cdf[i] = 0.0
         for i in range(i_hi, self.size):
             self.cdf[i] = 1.0
-        # recompute the CDF over the interval using the trapezoidal rule
+        # Recompute the CDF over the interval using the trapezoidal rule.
+        # Use a reverse scaling to compensate for the rightward over-weighting.
         if i_hi - i_lo == 1:
             self.cdf[i_lo] = 1.0
         else:
             self.cdf[i_lo] = 0.0
+            delta_i = <double>(i_hi - i_lo)
             for i in range(i_lo+1, i_hi):
-                csum += 0.5 * (self.pdf[i] + self.pdf[i-1])
+                # branches for n=0,1,2 to avoid needlessly calling `pow`
+                if sfact == 0.0:
+                    scale = 1.0
+                elif sfact == 1.0:
+                    scale = (1.0 - <double>(i - i_lo) / delta_i)
+                elif sfact == 2.0:
+                    scale = (1.0 - <double>(i - i_lo) / delta_i)
+                    scale *= scale
+                else:
+                    scale = (1.0 - <double>(i - i_lo) / delta_i)**sfact
+                # trapezoidal sum
+                csum += 0.5 * (self.pdf[i] + self.pdf[i-1]) * scale
                 self.cdf[i] = csum
         # re-normalize the CDF
         for i in range(i_lo, i_hi):
@@ -334,7 +348,9 @@ cdef class ResolvedWidthPrior(Prior):
             double v_lo, v_hi, sep, sep_tot, overf_factor
             double[10] min_seps
             Distribution vcen_dist = self.vcen_prior.dist
-        # FIXME will error if n > 10
+        # FIXME hard-coded to maximum of 10 components currently
+        if n > 10:
+            return
         ix_v = self.vcen_prior.p_ix * n
         ix_s = self.sigm_prior.p_ix * n
         v_lo = vcen_dist.xmin
@@ -366,7 +382,7 @@ cdef class ResolvedWidthPrior(Prior):
             sep = min_seps[i]  # first min_sep -> 0
             v_lo += sep
             v_hi += sep
-            vcen_dist.cdf_over_interval(v_lo, v_hi)
+            vcen_dist.cdf_over_interval(v_lo, v_hi, <double>(n-i))
             v_lo = vcen_dist.cdf_interp(utheta[ix_v+i])
             utheta[ix_v+i] = v_lo
 
@@ -464,7 +480,7 @@ cdef class Spectrum:
         for i in range(self.size):
             dev = self.data[i] - self.pred[i]
             lnL += dev * dev
-        return self.prefactor - lnL / (2 * self.noise**2)
+        return -lnL / (2 * self.noise**2)
 
     @property
     def sum_spec(self):
