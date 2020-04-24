@@ -658,3 +658,14 @@ def test_iemtex_interp():
     np.testing.assert_almost_equal(diffs.max(), 0, decimal=5)
 
 
+def test_profile_predict(AmmoniaSpectrum s, double[::1] params, bint
+        cold=False, bint lte=False, long n_repeat=1000):
+    cdef:
+        long i
+    for i in range(n_repeat):
+        # Add an offset to mess with the cache just a little
+        params[0] += 1e-16
+        c_amm_predict(s, &params[0], params.shape[0], cold, lte)
+    params[0] -= n_repeat * 1e-16
+
+
