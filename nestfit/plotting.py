@@ -431,7 +431,7 @@ def plot_3d_volume(sp, outname='volume_field_contour'):
 
 
 def plot_amm_specfit(sp, stack, pix, n_model=1, outname='specfit', cold=False,
-        kind='map'):
+        kind='map', zoom=False):
     assert kind in ('map', 'bestfit')
     lon_pix, lat_pix = pix
     group = sp.store.hdf[f'/pix/{lon_pix}/{lat_pix}/{n_model}']
@@ -448,10 +448,14 @@ def plot_amm_specfit(sp, stack, pix, n_model=1, outname='specfit', cold=False,
         varr = model.varr
         ax.fill_between(varr, data, np.zeros_like(data), color='yellow',
                 edgecolor='none', alpha=0.5)
-        ax.plot(varr, data, 'k-', linewidth=0.7, drawstyle='steps-pre')
+        ax.plot(varr, data, 'k-', linewidth=0.7, drawstyle='steps-mid')
         ax.plot(varr, model.components.T, '-', color='magenta', linewidth=1.0, alpha=0.5)
-        ax.plot(varr, model.sum_spec, '-', color='red', linewidth=1.0)
+        ax.plot(varr, model.sum_spec, '-', color='red', linewidth=1.0,
+                drawstyle='steps-mid')
         ax.set_xlim(varr.value.min(), varr.value.max())
+    if zoom:
+        axes[0].set_xlim(-7, 7)
+        axes[1].set_xlim(-7, 7)
     ymin = obs_spec[0].min() * 1.1
     ymax = obs_spec[0].max() * 1.1
     axes[0].set_ylim(ymin, ymax)

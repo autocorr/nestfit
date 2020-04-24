@@ -8,6 +8,7 @@ import os
 # externally linked chunk files on the NRAO's `lustre` filesystem.
 os.environ['HDF5_USE_FILE_LOCKING'] = 'FALSE'
 
+import time
 import shutil
 import warnings
 import itertools
@@ -28,7 +29,7 @@ from astropy.io import fits
 from nestfit.synth_spectra import get_test_spectra
 from nestfit.core.core import (
         Prior, ConstantPrior, DuplicatePrior, OrderedPrior, SpacedPrior,
-        CenSepPrior, ResolvedWidthPrior,
+        CenSepPrior, ResolvedCenSepPrior, ResolvedPlacementPrior,
         Distribution, PriorTransformer, Dumper, run_multinest,
 )
 from nestfit.models.ammonia import (
@@ -85,7 +86,7 @@ def get_irdc_priors(size=500, vsys=0.0):
     priors = np.array([
             #OrderedPrior(d_voff, 0),
             #SpacedPrior(Prior(d_voff, 0), Prior(d_vdep, 0)),
-            ResolvedWidthPrior(
+            ResolvedPlacementPrior(
                 Prior(d_voff, 0),
                 Prior(d_sigm, 4),
                 scale=1.5,
@@ -114,13 +115,14 @@ def get_synth_priors(size=500):
     u = np.linspace(0, 1, size)
     # prior distribution x axes
     # 0 voff [-3.900,  3.90] km/s  (center of two comps)
-    #   vsep [ 0.130,  2.70] km/s  (sep between comps)
+    #   vsep [ 0.130,  2.70] km/s    (sep between comps)
     # 1 tkin [ 7.900, 25.10] K
-    # 2 tex  [ 7.900, 25.10] K  (fixed to tkin in LTE)
+    # 2 tex  [ 7.900, 25.10] K    (fixed to tkin in LTE)
     # 3 ntot [12.950, 14.55] log(cm^-2)
-    # 4 sigm [ 0.075,  2.10] km/s  (scaled log-normal)
-    x_voff = 10.200 * u -  5.1
-    #x_voff =  7.800 * u -  3.90
+    # 4 sigm [ 0.075,  2.10] km/s    (scaled log-normal)
+    # 5 orth [ 0.000,  0.00]             (fixed to zero)
+    #x_voff = 10.200 * u -  5.1
+    x_voff =  7.800 * u -  3.90
     x_vsep =  2.570 * u +  0.13
     x_tkin = 17.200 * u +  7.90
     x_ntot =  1.600 * u + 12.95
@@ -141,20 +143,24 @@ def get_synth_priors(size=500):
     fwhm = 2 * np.sqrt(2 * np.log(2))
     priors = np.array([
             ## Using resolved width
-            ResolvedWidthPrior(
+            #ResolvedPlacementPrior(
+            #    Prior(d_voff, 0),
+            #    Prior(d_sigm, 4),
+            #    scale=1/fwhm,
+            #),
+            #DuplicatePrior(d_tkin, 1, 2),
+            #Prior(d_ntot, 3),
+            #ConstantPrior(0, 5),
+            ## Using center-separation prior
+            ResolvedCenSepPrior(
                 Prior(d_voff, 0),
+                Prior(d_vsep, 0),
                 Prior(d_sigm, 4),
                 scale=1/fwhm,
             ),
             DuplicatePrior(d_tkin, 1, 2),
             Prior(d_ntot, 3),
             ConstantPrior(0, 5),
-            ## Using center-separation prior
-            #CenSepPrior(Prior(d_voff, 0), Prior(d_vsep, 0)),
-            #DuplicatePrior(d_tkin, 1, 2),
-            #Prior(d_ntot, 3),
-            #Prior(d_sigm, 4),
-            #ConstantPrior(0, 5),
     ])
     return PriorTransformer(priors)
 
@@ -354,8 +360,11 @@ class HdfStore:
             return False
 
     def close(self):
-        self.hdf.flush()
-        self.hdf.close()
+        try:
+            self.hdf.flush()
+            self.hdf.close()
+        except ValueError:
+            print('Store HDF already closed.')
 
     def iter_pix_groups(self):
         assert self.is_open
@@ -451,6 +460,12 @@ class CubeFitter:
         # *after* the `multiprocessing.Process` has been forked from the main
         # Python process, and it inherits the HDF5 libraries state.
         #   See "Python and HDF5" pg. 116
+        # The NRAO Lustre system occasionally has issues opening files, leaving
+        # the process to hang in the C layer of HDF5 without a traceback. I
+        # suspect it is a timing issue when multiple user python processes
+        # request new HDF files at exactly the same time. A small random time
+        # is added in an attempt to avoid this.
+        time.sleep(np.random.random())  # 0-1 sec
         hdf = h5py.File(chunk_path, 'a')
         for (i_lon, i_lat) in zip(all_lon, all_lat):
             spec_data, has_nans = self.stack.get_spec_data(i_lon, i_lat)

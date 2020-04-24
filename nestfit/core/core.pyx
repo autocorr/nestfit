@@ -141,18 +141,18 @@ cdef class Distribution:
             self.cdf[i_lo] = 1.0
         else:
             self.cdf[i_lo] = 0.0
-            delta_i = <double>(i_hi - i_lo)
+            inv_delta_i = 1.0 / <double>(i_hi - i_lo)
             for i in range(i_lo+1, i_hi):
                 # branches for n=0,1,2 to avoid needlessly calling `pow`
                 if sfact == 0.0:
                     scale = 1.0
                 elif sfact == 1.0:
-                    scale = (1.0 - <double>(i - i_lo) / delta_i)
+                    scale = (1.0 - <double>(i - i_lo) * inv_delta_i)
                 elif sfact == 2.0:
-                    scale = (1.0 - <double>(i - i_lo) / delta_i)
+                    scale = (1.0 - <double>(i - i_lo) * inv_delta_i)
                     scale *= scale
                 else:
-                    scale = (1.0 - <double>(i - i_lo) / delta_i)**sfact
+                    scale = (1.0 - <double>(i - i_lo) * inv_delta_i)**sfact
                 # trapezoidal sum
                 csum += 0.5 * (self.pdf[i] + self.pdf[i-1]) * scale
                 self.cdf[i] = csum
@@ -294,24 +294,23 @@ cdef class SpacedPrior(Prior):
 
 cdef class CenSepPrior(Prior):
     cdef:
-        Prior prior_cen, prior_sep
+        Prior vcen_prior, vsep_prior
 
-    def __init__(self, prior_cen, prior_sep):
-        self.prior_cen = prior_cen
-        self.prior_sep = prior_sep
-        self.p_ix = self.prior_cen.p_ix
+    def __init__(self, vcen_prior, vsep_prior):
+        self.vcen_prior = vcen_prior
+        self.vsep_prior = vsep_prior
+        self.p_ix = self.vcen_prior.p_ix
         self.n_param = 1
 
     cdef void interp(self, double *utheta, long n):
         cdef:
-            long i
             long ix = self.p_ix * n
             double vcen, vsep
-        vcen = self.prior_cen.dist.ppf_interp(utheta[ix])
+        vcen = self.vcen_prior.dist.ppf_interp(utheta[ix])
         if n == 1:
             utheta[ix] = vcen
         elif n == 2:
-            vsep = self.prior_sep.dist.ppf_interp(utheta[ix+1])
+            vsep = self.vsep_prior.dist.ppf_interp(utheta[ix+1])
             utheta[ix  ] = vcen - 0.5 * vsep
             utheta[ix+1] = vcen + 0.5 * vsep
         else:
@@ -319,7 +318,55 @@ cdef class CenSepPrior(Prior):
             pass
 
 
-cdef class ResolvedWidthPrior(Prior):
+cdef class ResolvedCenSepPrior(Prior):
+    cdef:
+        double scale, sep_scale
+        Prior vcen_prior, vsep_prior, sigm_prior
+
+    def __init__(self, vcen_prior, vsep_prior, sigm_prior, scale=1.5):
+        """
+        Parameters
+        ----------
+        vcen_prior : Prior
+            Velocity component center position prior
+        vsep_prior : Prior
+            Velocity component separation prior
+        sigm_prior : Prior
+            Velocity dispersion prior
+        sep_scale : number, default 1.5
+            Multiplicative scaling factor of the Gaussian FWHM to provide the
+            minimum separation between components.
+        """
+        self.vcen_prior = vcen_prior
+        self.vsep_prior = vsep_prior
+        self.sigm_prior = sigm_prior
+        self.scale = scale
+        self.sep_scale = FWHM * scale
+        self.n_param = 2
+
+    cdef void interp(self, double *utheta, long n):
+        cdef:
+            long ix_v = self.vcen_prior.p_ix * n
+            long ix_s = self.sigm_prior.p_ix * n
+            double vcen, vsep, min_sep
+        # compute widths
+        self.sigm_prior.interp(utheta, n)
+        vcen = self.vcen_prior.dist.ppf_interp(utheta[ix_v])
+        if n == 1:
+            utheta[ix_v] = vcen
+        elif n == 2:
+            vsep = self.vsep_prior.dist.ppf_interp(utheta[ix_v+1])
+            min_sep = self.sep_scale * c_sqrt(utheta[ix_s] * utheta[ix_s+1])
+            if min_sep > vsep:
+                vsep = min_sep
+            utheta[ix_v  ] = vcen - 0.5 * vsep
+            utheta[ix_v+1] = vcen + 0.5 * vsep
+        else:
+            # FIXME need to parametrize higher order systems
+            pass
+
+
+cdef class ResolvedPlacementPrior(Prior):
     cdef:
         double scale, sep_scale
         Prior vcen_prior, sigm_prior
@@ -328,11 +375,11 @@ cdef class ResolvedWidthPrior(Prior):
         """
         Parameters
         ----------
-        vcen_pdf : ParamPdf
-            Velocity centroid parameter PDF
+        vcen_prior : Prior
+            Velocity centroid prior
         sigm_prior : Prior
             Velocity dispersion prior
-        sep_scale : number, default 1
+        sep_scale : number, default 1.5
             Multiplicative scaling factor of the Gaussian FWHM to provide the
             minimum separation between components.
         """
@@ -382,7 +429,7 @@ cdef class ResolvedWidthPrior(Prior):
             sep = min_seps[i]  # first min_sep -> 0
             v_lo += sep
             v_hi += sep
-            vcen_dist.cdf_over_interval(v_lo, v_hi, <double>(n-i))
+            vcen_dist.cdf_over_interval(v_lo, v_hi, <double>(n-1-i))
             v_lo = vcen_dist.cdf_interp(utheta[ix_v+i])
             utheta[ix_v+i] = v_lo
 
@@ -799,7 +846,7 @@ def test_resolved_width_prior():
     dist = Distribution(v_x, v_y)
     vcen_prior = Prior(dist, 0)
     sigm_prior = ConstantPrior(0.3, 1)
-    rw_prior = ResolvedWidthPrior(vcen_prior, sigm_prior)
+    rw_prior = ResolvedPlacementPrior(vcen_prior, sigm_prior)
     n = 3  # N components
     for i in range(5):
         utheta = np.random.uniform(size=2*n)
