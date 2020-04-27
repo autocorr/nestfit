@@ -658,8 +658,8 @@ def test_iemtex_interp():
     np.testing.assert_almost_equal(diffs.max(), 0, decimal=5)
 
 
-def test_profile_predict(AmmoniaSpectrum s, double[::1] params, bint
-        cold=False, bint lte=False, long n_repeat=1000):
+def test_profile_predict(AmmoniaSpectrum s, double[::1] params,
+        bint cold=False, bint lte=False, long n_repeat=1000):
     cdef:
         long i
     for i in range(n_repeat):

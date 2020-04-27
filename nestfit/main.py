@@ -34,6 +34,7 @@ from nestfit.core.core import (
 )
 from nestfit.models.ammonia import (
         amm_predict, AmmoniaSpectrum, AmmoniaRunner,
+        test_profile_predict,
 )
 
 
@@ -311,6 +312,14 @@ class CubeStack:
             any_nans |= has_nans
         return all_spec_data, any_nans
 
+    def get_max_snr(self, i_lon, i_lat):
+        max_snr = 0.0
+        for dcube in self.cubes:
+            _, arr, noise, _, _ = dcube.get_spec_data(i_lon, i_lat)
+            spec_snr = np.max(arr) / noise
+            max_snr = spec_snr if spec_snr > max_snr else max_snr
+        return max_snr
+
 
 def check_ext(store_name, ext='hdf'):
     if store_name.endswith(f'.{ext}'):
@@ -445,14 +454,37 @@ class CubeFitter:
     }
 
     def __init__(self, stack, utrans, runner_cls, runner_kwargs=None,
-            lnZ_thresh=11, ncomp_max=2, mn_kwargs=None):
+            lnZ_thresh=11, ncomp_max=2, mn_kwargs=None, nlive_snr_fact=5):
+        """
+        Parameters
+        ----------
+        stack : CubeStack
+        utrans : PriorTransformer
+        runner_cls : Runner
+        runner_kwargs : dict
+        lnZ_thresh : number, default 11
+            Log evidence threshold to use when choosing whether to increment
+            the number of fit components.
+        ncomp_max : number, default 2
+            Maximum number of components to fit
+        mn_kwargs : dict
+            Keyword parameters to pass to MultiNest run call
+        nlive_snr_fact : number, default 5
+            Multiplicative factor to increase the number of live points used in
+            fitting each pixel by:
+                nlive + int(nlive_snr_fact * snr)
+            where `nlive` is the value set in `mn_kwargs` arguement.
+        """
         self.stack = stack
         self.utrans = utrans
         self.runner_cls = runner_cls
         self.runner_kwargs = {} if runner_kwargs is None else runner_kwargs
         self.lnZ_thresh = lnZ_thresh
         self.ncomp_max = ncomp_max
-        self.mn_kwargs = self.mn_default_kwargs if mn_kwargs is None else mn_kwargs
+        self.mn_kwargs = self.mn_default_kwargs.copy()
+        if mn_kwargs is not None:
+            self.mn_kwargs.update(mn_kwargs)
+        self.nlive_snr_fact = nlive_snr_fact
 
     def fit(self, *args):
         (all_lon, all_lat), chunk_path = args
@@ -475,6 +507,10 @@ class CubeFitter:
                 continue
             group_name = f'/pix/{i_lon}/{i_lat}'
             group = hdf.require_group(group_name)
+            # Increase number of live points based on the SNR factor
+            max_snr = self.stack.get_max_snr(i_lon, i_lat)
+            mn_kwargs = self.mn_kwargs.copy()
+            mn_kwargs['nlive'] += int(self.nlive_snr_fact * max_snr)
             # Iteratively fit additional components until they no longer
             # produce a significant increase in the evidence.
             ncomp = 1
@@ -489,7 +525,7 @@ class CubeFitter:
                     old_lnZ = runner.null_lnZ
                     assert np.isfinite(old_lnZ)
                 # FIXME needs tuned/specific kwargs for a given ncomp
-                run_multinest(runner, dumper, **self.mn_kwargs)
+                run_multinest(runner, dumper, **mn_kwargs)
                 assert np.isfinite(runner.run_lnZ)
                 if runner.run_lnZ - old_lnZ < self.lnZ_thresh:
                     break
@@ -983,6 +1019,11 @@ def test_nested(ncomp=2, prefix='test'):
 
 
 def profile_nested(ncomp=2):
+    """
+    Profile the various components using the line profiler. Run using the
+    IPython magic `lprun`:
+        %lprun -f main.profile_nested main.profile_nested()
+    """
     synspec = get_test_spectra()
     spectra = np.array([syn.to_ammspec() for syn in synspec])
     amm1 = spectra[0]
@@ -992,6 +1033,12 @@ def profile_nested(ncomp=2):
         group = hdf.require_group(f'test/{ncomp}')
         dumper = Dumper(group, no_dump=True)
         runner = AmmoniaRunner(spectra, utrans, ncomp)
+        # optimal cache layout prediction without python overhead
+        n_repeat = 1e4
+        utheta = 0.5 * np.ones(6*ncomp)
+        utrans.transform(utheta, ncomp)
+        test_profile_predict(amm1, utheta, n_repeat=n_repeat)
+        test_profile_predict(amm2, utheta, n_repeat=n_repeat)
         # transform and spectral prediction
         for _ in range(1000):
             utheta = np.random.uniform(0, 1, size=6*ncomp)
