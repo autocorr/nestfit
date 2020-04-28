@@ -824,7 +824,7 @@ def aggregate_run_pdfs(store, par_bins=None):
     store.create_dataset('post_pdfs', histdata, group=dpath)
 
 
-def convolve_post_pdfs(store, kernel):
+def convolve_post_pdfs(store, kernel, evid_weight=True):
     """
     Spatially convolve the model posterior PDF. Products include:
         * 'conv_post_pdfs' (r, m, p, h, b, l)
@@ -835,6 +835,8 @@ def convolve_post_pdfs(store, kernel):
     kernel : number or `astropy.convolution.Kernel2D`
         Either a kernel instance or a number defining the standard deviation in
         map pixels of a Gaussian convolution kernel.
+    evid_weight : bool, default True
+        Use the evidence over the null model to weight the pixel data.
     """
     print(':: Convolving posterior PDFs')
     if isinstance(kernel, (int, float)):
@@ -845,16 +847,21 @@ def convolve_post_pdfs(store, kernel):
     # dimensions (r, m, p, h, b, l)
     data = hdf[f'{dpath}/post_pdfs'][...]
     cdata = np.zeros_like(data)
-    # dimensions (m, b, l)
-    evid = hdf[f'{dpath}/evidence'][...]
-    # dimensions (b, l)
-    nbest = hdf[f'{dpath}/conv_nbest'][...]
-    # compute difference between preferred model number and zero.
-    z_best = np.take_along_axis(evid, nbest[np.newaxis,...], axis=0)
-    d_evid = z_best[0,:,:] - evid[0,:,:]
-    # weight the PDF distributions by the evidence delta
-    data *= d_evid.reshape((1, 1, 1, 1, *d_evid.shape))
-    data /= np.nansum(d_evid)
+    # Fill zeros to avoid problems with zeros in log product
+    data[data == 0] = 1e-32
+    ldata = np.log(data)
+    if evid_weight:
+        # dimensions (m, b, l)
+        evid = hdf[f'{dpath}/evidence'][...]
+        # dimensions (b, l)
+        nbest = hdf[f'{dpath}/conv_nbest'][...]
+        # compute difference between preferred model number and zero.
+        z_best = np.take_along_axis(evid, nbest[np.newaxis,...], axis=0)
+        d_evid = z_best[0,:,:] - evid[0,:,:]
+        d_evid /= np.nanmax(d_evid)
+        d_evid = d_evid.reshape((1, 1, 1, 1, *d_evid.shape))
+        # weight the PDF distributions by the evidence delta
+        ldata *= d_evid
     # Spatially convolve the (l, b) map for every (model, parameter,
     # histogram) set.
     cart_prod = itertools.product(
@@ -867,7 +874,9 @@ def convolve_post_pdfs(store, kernel):
         if i_m > i_r:
             continue
         cdata[i_r,i_m,i_p,i_h,:,:] = convolution.convolve_fft(
-                data[i_r,i_m,i_p,i_h,:,:], kernel)
+                ldata[i_r,i_m,i_p,i_h,:,:], kernel)
+    # convert back to linear scaling
+    cdata = np.exp(cdata)
     # ensure the PDFs are normalized
     cdata /= np.nansum(cdata, axis=3, keepdims=True)
     # re-mask the NaN positions
@@ -986,14 +995,36 @@ def deblend_hf_intensity(store, stack, runner):
     store.create_dataset('hf_deblended', hfdb.transpose(), group=dpath)
 
 
-def postprocess_run(store, stack, par_bins=None, kernel=None):
+def postprocess_run(store, stack, runner, par_bins=None, evid_kernel=None,
+        post_kernel=None, evid_weight=True):
+    """
+    Run all post-processing steps on the store file. The individual pixel data
+    is aggregated into dense array products and a spatial convolution is
+    applied to the evidence and posteriors.
+
+    Parameters
+    ----------
+    store : HdfStore
+    stack : CubeStack
+    runner : Runner
+    par_bins : list-like
+    evid_kernel : number or `astropy.convolution.Kernel2D`
+        Either a kernel instance or a number defining the standard deviation in
+        map pixels of a Gaussian convolution kernel. Kernel to be used for
+        evidence convolution.
+    post_kernel : number or `astropy.convolution.Kernel2D`
+        Kernel used to be used for posterior distribution convolution.
+    evid_weight : bool, default True
+        Use the evidence over the null model to weight the pixel data in the
+        posterior distribution convolution.
+    """
     aggregate_run_attributes(store)
-    convolve_evidence(store, kernel)
+    convolve_evidence(store, evid_kernel)
     aggregate_run_products(store)
     aggregate_run_pdfs(store, par_bins=par_bins)
-    convolve_post_pdfs(store, kernel)
+    convolve_post_pdfs(store, post_kernel, evid_weight=evid_weight)
     quantize_conv_marginals(store)
-    deblend_hf_intensity(store, stack)
+    deblend_hf_intensity(store, stack, runner)
 
 
 ##############################################################################
