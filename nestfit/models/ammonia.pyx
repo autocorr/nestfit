@@ -289,7 +289,7 @@ TEX_LABELS = [
         r'$v_\mathrm{lsr} \ [\mathrm{km\, s^{-1}}]$',
         r'$T_\mathrm{rot} \ [\mathrm{K}]$',
         r'$T_\mathrm{ex} \ [\mathrm{K}]$',
-        r'$\log(N_\mathrm{p}) \ [\mathrm{cm^{-2}}]$',
+        r'$\log(N) \ [\log(\mathrm{cm^{-2}})]$',
         r'$\sigma_\mathrm{v} \ [\mathrm{km\, s^{-1}}]$',
         r'$f_\mathrm{o}$',
 ]

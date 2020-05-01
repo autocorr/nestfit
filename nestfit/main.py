@@ -874,7 +874,7 @@ def convolve_post_pdfs(store, kernel, evid_weight=True):
         if i_m > i_r:
             continue
         cdata[i_r,i_m,i_p,i_h,:,:] = convolution.convolve_fft(
-                ldata[i_r,i_m,i_p,i_h,:,:], kernel)
+                ldata[i_r,i_m,i_p,i_h,:,:], kernel, normalize_kernel=False)
     # convert back to linear scaling
     cdata = np.exp(cdata)
     # ensure the PDFs are normalized
@@ -1013,7 +1013,9 @@ def postprocess_run(store, stack, runner, par_bins=None, evid_kernel=None,
         map pixels of a Gaussian convolution kernel. Kernel to be used for
         evidence convolution.
     post_kernel : number or `astropy.convolution.Kernel2D`
-        Kernel used to be used for posterior distribution convolution.
+        Kernel used to be used for posterior distribution convolution. Note
+        that a normalized kernel is unlikely to be desired, as this will result
+        in a weighted geometric mean of the posteriors.
     evid_weight : bool, default True
         Use the evidence over the null model to weight the pixel data in the
         posterior distribution convolution.

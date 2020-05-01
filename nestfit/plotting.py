@@ -174,10 +174,11 @@ def plot_spec_compare(synspec, analyzer, outname='test'):
 
 def plot_corner(group, outname='corner'):
     ncomp = group.attrs['ncomp']
-    par_labels = TEX_LABELS
+    par_labels = TEX_LABELS.copy()
+    par_labels[3] = r'$\log(N) \ [\log(\mathrm{cm^{-2}})]$'
     n_params = group.attrs['n_params'] // ncomp
     names = get_par_names()
-    post = group['posteriors'][...][:,:-2]  # don't need logL & P
+    post = group['posteriors'][...][:,:-2]  # posterior param values
     # Give each model component parameter set its own sampler object so that
     # each can be over-plotted in its own color.
     samples = [
@@ -185,9 +186,12 @@ def plot_corner(group, outname='corner'):
                 samples=post[:,ii::ncomp],
                 names=names,
                 labels=par_labels,
-                label=f'Component {ii+1}')
+                label=f'Component {ii+1}',
+                name_tag=f'{ii}',
+                sampler='nested')
             for ii in range(ncomp)
     ]
+    [s.updateSettings({'contours': [0.68, 0.90]}) for s in samples]
     fig = gd_plt.get_subplot_plotter()
     fig.triangle_plot(samples, filled=True,
             line_args=[
@@ -203,13 +207,21 @@ def plot_multicomp_velo_2corr(group, outname='velo_2corr'):
     ncomp = group.attrs['ncomp']
     assert ncomp == 2
     n_params = group.attrs['n_params'] // ncomp
-    post = group['posteriors'][...][:,:-2]  # don't need logL & P
+    post = group['posteriors'][...][:,:-2]  # param values
     names = get_par_names(ncomp)
-    samples = getdist.MCSamples(samples=post, names=names)
+    par_labels = [''] * 12
+    par_labels[0] = r'$v_\mathrm{lsr}\, (1) \ [\mathrm{km\,s^{-1}}]$'
+    par_labels[1] = r'$v_\mathrm{lsr}\, (2) \ [\mathrm{km\,s^{-1}}]$'
+    par_labels[8] = r'$\sigma_\mathrm{v}\, (1) \ [\mathrm{km\,s^{-1}}]$'
+    par_labels[9] = r'$\sigma_\mathrm{v}\, (2) \ [\mathrm{km\,s^{-1}}]$'
+    samples = getdist.MCSamples(samples=post, names=names, labels=par_labels,
+            sampler='nested')
+    samples.updateSettings({'contours': [0.68, 0.90]})
     fig = gd_plt.get_subplot_plotter()
     x_names = ['v1', 's1']
     y_names = ['v2', 's2']
-    fig.rectangle_plot(x_names, y_names, roots=samples, filled=True)
+    fig.rectangle_plot(x_names, y_names, roots=samples, filled=True,
+            line_args={'lw': 2, 'color': 'tab:gray'})
     fig.export(f'{outname}.pdf')
     plt.close()
 
