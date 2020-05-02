@@ -1,7 +1,4 @@
 #!/usr/bin/env python3
-"""
-Plotting module for visualizing spectra and fit results.
-"""
 
 import itertools
 from pathlib import Path

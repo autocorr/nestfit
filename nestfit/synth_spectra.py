@@ -1,7 +1,4 @@
 #!/usr/bin/env python3
-"""
-Utilities for processing synthetic spectra.
-"""
 
 import numpy as np
 
