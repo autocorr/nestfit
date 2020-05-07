@@ -17,7 +17,7 @@ import numpy as np
 import scipy as sp
 
 import spectral_cube
-from astropy import convolution
+from astropy import (convolution, units)
 from astropy.io import fits
 
 from nestfit.synth_spectra import get_test_spectra
@@ -122,10 +122,18 @@ class DataCube:
         return abs(axis[1] - axis[0]).value
 
     def data_from_cube(self, cube):
-        cube = cube.to('K').with_spectral_unit('Hz')
+        # convert intensity units to Kelvin
+        if cube.unit == '':
+            print('-- Assuming cube intensity units of K')
+            cube._unit = units.K
+        elif cube.unit != 'K':
+            cube = cube.to('K')
+        # convert frequency axis to units of Hz
+        if cube.spectral_axis.unit != 'Hz':
+            cube = cube.with_spectral_unit('Hz')
         axis = cube.spectral_axis.value.copy()
         nu_chan = axis[1] - axis[0]
-        # frequency axis needs to be ascending order
+        # ensure that the frequency axis is in ascending order
         if nu_chan < 0:
             cube = cube[::-1]
             axis = cube.spectral_axis.value.copy()

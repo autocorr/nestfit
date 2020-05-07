@@ -4,6 +4,7 @@ import numpy as np
 import scipy as sp
 
 from nestfit.core.core import (
+        Distribution,
         Prior,
         ConstantPrior,
         DuplicatePrior,
@@ -12,7 +13,6 @@ from nestfit.core.core import (
         CenSepPrior,
         ResolvedCenSepPrior,
         ResolvedPlacementPrior,
-        Distribution,
         PriorTransformer,
 )
 
