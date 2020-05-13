@@ -6,8 +6,8 @@ from pathlib import Path
 import numpy as np
 from scipy import special
 import matplotlib as mpl
-from matplotlib import (patheffects, animation)
 from matplotlib import pyplot as plt
+from matplotlib import (patheffects, animation, patches)
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 import getdist
@@ -15,6 +15,7 @@ from getdist import plots as gd_plt
 import pyspeckit
 from astropy.wcs import WCS
 
+from nestfit.main import take_by_components
 from nestfit.synth_spectra import (SyntheticSpectrum, get_test_spectra)
 from nestfit.models.ammonia import (AmmoniaSpectrum, amm_predict,
         get_par_names, TEX_LABELS, TEX_LABELS_NU)
@@ -26,14 +27,16 @@ plt.rc('xtick', direction='out', top=True)
 plt.rc('ytick', direction='out', right=True)
 
 
-CLR_CMAP = plt.cm.Spectral_r
-CLR_CMAP.set_bad('0.5', 1.0)
+CLR_CMAP = plt.cm.magma
+CLR_CMAP.set_bad('0.3', 1.0)
+RNB_CMAP = plt.cm.Spectral_r
+RNB_CMAP.set_bad('0.3', 1.0)
 HOT_CMAP = plt.cm.afmhot
-HOT_CMAP.set_bad('0.5', 1.0)
+HOT_CMAP.set_bad('0.3', 1.0)
+STR_CMAP = plt.cm.gist_stern
+STR_CMAP.set_bad('0.3', 1.0)
 RDB_CMAP = plt.cm.RdBu
-RDB_CMAP.set_bad('0.5', 1.0)
-VIR_CMAP = plt.cm.viridis
-VIR_CMAP.set_bad('0.5', 1.0)
+RDB_CMAP.set_bad('0.3', 1.0)
 
 _cmap_list = [(0.5, 0.5, 0.5, 1.0)] + [plt.cm.plasma(i) for i in range(plt.cm.plasma.N)]
 NBD_CMAP = mpl.colors.LinearSegmentedColormap.from_list(
@@ -41,6 +44,10 @@ NBD_CMAP = mpl.colors.LinearSegmentedColormap.from_list(
 )
 NBD_CMAP.set_bad('0.2')
 
+
+##############################################################################
+#                        Utilities and Plotting API
+##############################################################################
 
 def get_amm_psk_xarrs(stack):
     freq_dict = pyspeckit.spectrum.models.ammonia.freq_dict
@@ -65,26 +72,164 @@ def save_figure(filen, dpi=300):
     plt.clf()
 
 
-def subplots_adjust():
-    plt.tight_layout()
-    plt.subplots_adjust(left=0.20, right=0.95, bottom=0.15, top=0.95)
-
-
-def add_scaled_colorbar(mappable):
-    """
-    NOTE The following code was written by Joseph Long and the original may be
-    found here:
-        https://joseph-long.com/writing/colorbars/
-    """
-    last_axes = plt.gca()
-    ax = mappable.axes
-    fig = ax.figure
-    divider = make_axes_locatable(ax)
-    cax = divider.append_axes("right", size="5%", pad=0.05)
-    cbar = fig.colorbar(mappable, cax=cax)
-    plt.sca(last_axes)
+def add_discrete_colorbar(ax, vmin=0, vmax=2, orientation='vertical'):
+    t_cbar = plt.colorbar(ax, fraction=0.046, pad=0.04)
+    t_cbar.ax.clear()
+    ticks = np.arange(vmin, vmax+1)
+    bounds = np.arange(vmin, vmax+2) - 0.5
+    norm  = mpl.colors.BoundaryNorm(bounds, NBD_CMAP.N)
+    cbar = mpl.colorbar.ColorbarBase(t_cbar.ax, cmap=NBD_CMAP, norm=norm,
+            boundaries=bounds, ticks=ticks, spacing='uniform', orientation=orientation)
     return cbar
 
+
+class StorePlotter:
+    lon_label = r'$\mathrm{Right\ Ascension\ (J2000)}$'
+    lat_label = r'$\mathrm{Declination\ (J2000)}$'
+    cbar_width = 0.7  # inch
+    inch_per_pix = 1.8e-2
+    edge_pads = (0.2, 0.1, 0.2, 0.1)  # (l, r, b, t) inch
+    adjust_kwargs = {'left': 0.12, 'right': 0.92, 'bottom': 0.15, 'top': 0.95}
+
+    def __init__(self, store, plot_dir=''):
+        """
+        Parameters
+        ----------
+        store : HdfStore
+        """
+        self.store = store
+        self.plot_dir = Path(plot_dir)
+        self.header = store.read_header(full=True)
+        self.wcs = WCS(store.read_header(full=False))
+        self.ncomp_max = store.hdf.attrs['n_max_components']
+
+    @property
+    def shape(self):
+        return self.header['NAXIS1'], self.header['NAXIS2']
+
+    @property
+    def pixel_scale(self):
+        scale1 = abs(self.header['CDELT1'])
+        scale2 = abs(self.header['CDELT2'])
+        return scale1, scale2
+
+    def offset_corner_pos(self, offset_frac, loc='upper left'):
+        assert loc in ('upper right', 'upper left', 'lower left', 'lower right')
+        x, y = self.shape
+        y -= 1
+        pix_sep = x * offset_frac
+        if loc == 'lower left':
+            cx = pix_sep
+            cy = pix_sep
+        elif loc == 'lower right':
+            cx = x - pix_sep
+            cy = pix_sep
+        elif loc == 'upper right':
+            cx = x - pix_sep
+            cy = y - pix_sep
+        elif loc == 'upper left':
+            cx = pix_sep
+            cy = y - pix_sep
+        else:
+            raise ValueError(f'Invalid loc: "{loc}"')
+        return cx, cy
+
+    def imshow_discrete(self, ax, data, vmin=0, vmax=4):
+        im = ax.imshow(data, vmin=vmin, vmax=vmax, cmap=NBD_CMAP)
+        cbar = add_discrete_colorbar(im, vmin=vmin, vmax=vmax)
+        return im, cbar
+
+    def set_lon_label(self, ax, labelpad=0):
+        ax.set_xlabel(self.lon_label)
+
+    def set_lat_label(self, ax, labelpad=-0.8):
+        ax.set_ylabel(self.lat_label, labelpad=labelpad)
+
+    def set_labels(self, ax):
+        self.set_lon_label(ax)
+        self.set_lat_label(ax)
+
+    def set_corner_label(self, ax, label, offset_frac=0.03, loc='lower left'):
+        if loc == 'lower left':
+            ha, va = 'left', 'bottom'
+        elif loc == 'lower right':
+            ha, va = 'right', 'bottom'
+        elif loc == 'upper right':
+            ha, va = 'right', 'top'
+        elif loc == 'upper left':
+            ha, va = 'left', 'top'
+        else:
+            raise ValueError(f'Invalid loc: "{loc}"')
+        xy = self.offset_corner_pos(offset_frac, loc=loc)
+        txt = ax.annotate(label, xy=xy, xycoords='data', fontsize=10,
+                horizontalalignment=ha, verticalalignment=va)
+        txt.set_path_effects([patheffects.withStroke(linewidth=4.5, foreground='w')])
+        return txt
+
+    def axesfrac_to_pixels(self, xy):
+        shape = self.shape
+        return xy[0]*shape[0], xy[1]*shape[1]
+
+    def get_figsize(self, colorbar=True, nrows=1, ncols=1):
+        cbar_width = self.cbar_width if colorbar else 0
+        w_pix = self.store.hdf.attrs['naxis1']
+        h_pix = self.store.hdf.attrs['naxis2']
+        width = w_pix * self.inch_per_pix * ncols + cbar_width
+        height = h_pix * self.inch_per_pix * nrows
+        pad_l, pad_r, pad_b, pad_t = self.edge_pads
+        width += pad_r + pad_r
+        height += pad_b + pad_t
+        return width, height
+
+    def format_labels_for_grid(self, ax):
+        if ax.is_first_col():
+            self.set_lat_label(ax, labelpad=0.8)
+        else:
+            wax = ax.coords['dec']
+            wax.set_axislabel('')
+            wax.set_ticklabel_visible(False)
+        if ax.is_last_row():
+            self.set_lon_label(ax)
+        else:
+            wax = ax.coords['ra']
+            wax.set_axislabel('')
+            wax.set_ticklabel_visible(False)
+
+    def subplots_adjust(self, **kwargs):
+        if not kwargs:
+            kwargs = self.adjust_kwargs
+        plt.tight_layout()
+        plt.subplots_adjust(**kwargs)
+
+    def save(self, outname, dpi=300):
+        save_figure(self.plot_dir/outname, dpi=dpi)
+
+    def add_beam(self, ax, offset_frac=0.02, loc='upper left', color='cyan'):
+        hdr = self.store.read_header()
+        scale, _ = self.pixel_scale
+        try:
+            bmaj = hdr['BMAJ'] / scale
+            bmin = hdr['BMIN'] / scale
+            pa   = hdr['BPA']
+            # convert axes frac to data position
+        except KeyError:
+            print('KeyError: undefined beam FITS header parameters in store')
+            return
+        xy = self.offset_corner_pos(offset_frac, loc=loc)
+        ellipse = patches.Ellipse(xy, bmaj, bmin, pa, color=color)
+        ax.add_artist(ellipse)
+
+    def add_field_mask_contours(self, ax):
+        nbest = self.store.hdf['products/nbest'][...]
+        # The `nbest` array has values equal to -1 where the union of data cubes
+        # contains NaNs.
+        ax.contour(nbest, levels=[-0.5], colors='black', linewidths=0.7,
+                linestyles='dotted')
+
+
+##############################################################################
+#                         Individual Plots
+##############################################################################
 
 def plot_synth_spectra(spectra=None):
     if spectra is None:
@@ -152,18 +297,6 @@ def plot_spec_compare(synspec, analyzer, outname='test'):
         ax.set_xlim(spec.varr.value.min(), spec.varr.value.max())
     ax.set_xlabel(r'$v_\mathrm{lsr} \ [\mathrm{km\, s^{-1}}]$')
     ax.set_ylabel(r'$T_\mathrm{b} \ [\mathrm{K}]$')
-    ## Comparison of the "true" residuals and the residuals from the best-fit
-    # use error function to represent true noise distribution and use the true
-    # noise drawn in the synthetic spectrum.
-    #bins = np.linspace(-0.1, 0.1, 100)
-    #errdist = 0.5 * special.erf(bins/runner.noise) + 0.5
-    #ax1.plot(bins, errdist, '-', color='0.5')
-    #ax1.hist(synspec.noise_spec, bins=bins, cumulative=True, density=True,
-    #        histtype='step', color='black',)
-    #ax1.hist(runner.ydata-best_spec.sum_spec, bins=bins, cumulative=True, density=True,
-    #        histtype='step', color='red')
-    #ax1.set_xlabel(r'$T_\mathrm{b} \ [\mathrm{K}]$')
-    #ax1.set_ylabel(r'$\mathrm{Residual\ CDF}$')
     # save figure
     plt.tight_layout()
     save_figure(outname)
@@ -223,87 +356,48 @@ def plot_multicomp_velo_2corr(group, outname='velo_2corr'):
     plt.close()
 
 
-def add_discrete_colorbar(ax, vmin=0, vmax=2, orientation='vertical'):
-    t_cbar = plt.colorbar(ax)
-    t_cbar.ax.clear()
-    ticks = np.arange(vmin, vmax+1)
-    bounds = np.arange(vmin, vmax+2) - 0.5
-    norm  = mpl.colors.BoundaryNorm(bounds, NBD_CMAP.N)
-    cbar = mpl.colorbar.ColorbarBase(t_cbar.ax, cmap=NBD_CMAP, norm=norm,
-            boundaries=bounds, ticks=ticks, spacing='uniform', orientation=orientation)
-    return cbar
-
-
-class StorePlotter:
-    lon_label = r'$\mathrm{Right\ Ascension\ (J2000)}$'
-    lat_label = r'$\mathrm{Declination\ (J2000)}$'
-
-    def __init__(self, store, plot_dir=''):
-        """
-        Parameters
-        ----------
-        store : HdfStore
-        """
-        self.store = store
-        self.plot_dir = Path(plot_dir)
-        self.wcs = WCS(store.read_header(full=False))
-        self.ncomp_max = store.hdf.attrs['n_max_components']
-
-    def imshow_discrete(self, ax, data, vmin=0, vmax=4):
-        im = ax.imshow(data, vmin=vmin, vmax=vmax, cmap=NBD_CMAP)
-        cbar = add_discrete_colorbar(im, vmin=vmin, vmax=vmax)
-        return im, cbar
-
-    def set_lon_label(self, ax, labelpad=0):
-        ax.set_xlabel(self.lon_label)
-
-    def set_lat_label(self, ax, labelpad=-0.8):
-        ax.set_ylabel(self.lat_label, labelpad=labelpad)
-
-    def set_labels(self, ax):
-        self.set_lon_label(ax)
-        self.set_lat_label(ax)
-
-    def set_corner_label(self, ax, label, xy=(0.035, 0.045)):
-        txt = ax.annotate(label, xy=xy, xycoords='axes fraction', fontsize=10)
-        txt.set_path_effects([patheffects.withStroke(linewidth=4.5, foreground='w')])
-        return txt
-
-    def format_labels_for_grid(self, ax):
-        if ax.is_first_col():
-            self.set_lat_label(ax, labelpad=0.8)
-        else:
-            wax = ax.coords['dec']
-            wax.set_axislabel('')
-            wax.set_ticklabel_visible(False)
-        if ax.is_last_row():
-            self.set_lon_label(ax)
-        else:
-            wax = ax.coords['ra']
-            wax.set_axislabel('')
-            wax.set_ticklabel_visible(False)
-
-    def save(self, outname, dpi=300):
-        save_figure(self.plot_dir/outname, dpi=dpi)
+def plot_evdiff(sp, outname='evdiff', conv=True):
+    if conv:
+        prefix = 'conv'
+        evid = sp.store.hdf['/products/conv_evidence'][...]
+    else:
+        prefix = 'local'
+        evid = sp.store.hdf['/products/evidence'][...]
+    data = evid[1] - evid[0]
+    fig, ax = plt.subplots(figsize=sp.get_figsize(), subplot_kw={'projection': sp.wcs})
+    im = ax.imshow(data, vmin=-3, vmax=3, cmap=CLR_CMAP)
+    ax.contourf(data, levels=[3, 11, np.nanmax(data)],
+            colors=['forestgreen', 'limegreen'])
+    cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    cbar.set_label(r'$\log \mathcal{Z}_1 / \mathcal{Z}_0$')
+    sp.add_field_mask_contours(ax)
+    sp.add_beam(ax)
+    sp.set_labels(ax)
+    sp.subplots_adjust()
+    sp.save(f'{outname}_{prefix}')
 
 
 def plot_nbest(sp, outname='nbest'):
     data = sp.store.hdf['/products/nbest']
-    fig, ax = plt.subplots(figsize=(4, 3.3), subplot_kw={'projection': sp.wcs})
+    fig, ax = plt.subplots(figsize=sp.get_figsize(), subplot_kw={'projection': sp.wcs})
     im, cbar = sp.imshow_discrete(ax, data, vmin=0, vmax=2)
     cbar.set_label(r'$N_\mathrm{comp}$')
+    sp.add_field_mask_contours(ax)
+    sp.add_beam(ax)
     sp.set_labels(ax)
-    subplots_adjust()
+    sp.subplots_adjust()
     sp.save(outname)
 
 
 def plot_conv_nbest(sp, outname='conv_nbest'):
     data = sp.store.hdf['/products/conv_nbest']
-    fig, ax = plt.subplots(figsize=(4, 3.3), subplot_kw={'projection': sp.wcs})
+    fig, ax = plt.subplots(figsize=sp.get_figsize(), subplot_kw={'projection': sp.wcs})
     im, cbar = sp.imshow_discrete(ax, data, vmin=0, vmax=2)
-    cbar.set_label(r'$N_\mathrm{comp}$')
+    cbar.set_label(r'$N_\mathrm{comp}\ (\mathrm{conv.})$')
+    sp.add_field_mask_contours(ax)
+    sp.add_beam(ax)
     sp.set_labels(ax)
-    subplots_adjust()
+    sp.subplots_adjust()
     sp.save(outname)
 
 
@@ -312,45 +406,61 @@ def plot_deblend_peak(sp, outname='hf_deblend_peak'):
     data = sp.store.hdf['/products/peak_intensity']
     data = np.nanmax(data, axis=1)
     n_trans, _, _ = data.shape
-    fig, axes = plt.subplots(nrows=1, ncols=n_trans, figsize=(6.5, 3.0),
+    figsize = sp.get_figsize(nrows=1, ncols=2)
+    fig, axes = plt.subplots(nrows=1, ncols=n_trans, figsize=figsize,
             subplot_kw={'projection': sp.wcs})
-    vmin = np.nanmin(data)
-    vmax = np.nanmax(data) * 1.1
+    vmin = 0
+    vmax = np.nanmax(data)
     for ii, ax in enumerate(axes):
         img = data[ii,:,:]
-        img[np.isnan(img)] = 0
         im = ax.imshow(img, vmin=vmin, vmax=vmax, cmap=HOT_CMAP)
         sp.set_corner_label(ax, labels[ii])
         sp.format_labels_for_grid(ax)
-    cax = fig.add_axes([0.89, 0.20, 0.015, 0.75])
+        sp.add_field_mask_contours(ax)
+        sp.add_beam(ax)
+    cax = fig.add_axes([0.92, 0.15, 0.015, 0.8])  # l, b, w, h
     cbar = plt.colorbar(im, cax=cax)
     cbar.minorticks_on()
-    cbar.set_label(r'$T_\mathrm{b,pk} \ [\mathrm{K}]$')
-    plt.tight_layout()
-    plt.subplots_adjust(left=0.15, right=0.875, bottom=0.20, top=0.95)
+    cbar.set_label(r'$\mathrm{max}(\tilde{T}_\mathrm{b}) \ [\mathrm{K}]$')
+    sp.subplots_adjust(left=0.09, right=0.9, bottom=0.15, top=0.95)
     sp.save(outname)
 
 
-def plot_deblend_intintens(sp, outname='hf_deblend_intintens'):
+def plot_deblend_intintens(sp, vmax=10, outname='hf_deblend_intintens'):
+    """
+    Figure preferences chosen to correspond with Figure 19 in Keown et al. (2019).
+
+    Parameters
+    ----------
+    vmax : number, default 10
+    """
     labels = (r'(1,1)', r'(2,2)')
     data = sp.store.hdf['/products/integrated_intensity']
+    mask = sp.store.hdf['/products/peak_intensity'][:,0,:,:]  # first component
     data = np.nansum(data, axis=1)
+    data[np.isnan(mask)] = np.nan
     n_trans, _, _ = data.shape
-    fig, axes = plt.subplots(nrows=1, ncols=n_trans, figsize=(6.5, 3.0),
+    figsize = sp.get_figsize(nrows=1, ncols=2)
+    fig, axes = plt.subplots(nrows=1, ncols=n_trans, figsize=figsize,
             subplot_kw={'projection': sp.wcs})
-    vmin = np.nanmin(data)
-    vmax = np.nanmax(data) * 1.1
+    vmin = 0
+    if vmax is None:
+        vmax = np.nanmax(data)
+        extend = 'neither'
+    else:
+        extend = 'max'
     for ii, ax in enumerate(axes):
         img = data[ii,:,:]
-        im = ax.imshow(img, vmin=vmin, vmax=vmax, cmap=HOT_CMAP)
+        im = ax.imshow(img, vmin=vmin, vmax=vmax, cmap=STR_CMAP)
         sp.set_corner_label(ax, labels[ii])
         sp.format_labels_for_grid(ax)
-    cax = fig.add_axes([0.89, 0.20, 0.015, 0.75])
-    cbar = plt.colorbar(im, cax=cax)
+        sp.add_field_mask_contours(ax)
+        sp.add_beam(ax)
+    cax = fig.add_axes([0.92, 0.15, 0.015, 0.8])  # l, b, w, h
+    cbar = plt.colorbar(im, cax=cax, extend=extend)
     cbar.minorticks_on()
-    cbar.set_label(r'$\int T_\mathrm{b,pk}\, dv \ [\mathrm{K\, km\, s^{-1}}]$')
-    plt.tight_layout()
-    plt.subplots_adjust(left=0.15, right=0.875, bottom=0.20, top=0.95)
+    cbar.set_label(r'$\int \tilde{T}_\mathrm{b} \mathop{}\!\mathrm{d} v \ [\mathrm{K\, km\, s^{-1}}]$')
+    sp.subplots_adjust(left=0.09, right=0.9, bottom=0.15, top=0.95)
     sp.save(outname)
 
 
@@ -359,7 +469,8 @@ def plot_ncomp_metrics(sp, outname='ncomp_metrics'):
     aicc = sp.store.hdf['/products/AICc'][...]
     bic  = sp.store.hdf['/products/BIC'][...]
     lnz  = sp.store.hdf['/products/evidence'][...]
-    fig, axes = plt.subplots(nrows=2, ncols=2, figsize=(8, 7.5),
+    figsize = sp.get_figsize(nrows=2, ncols=2)
+    fig, axes = plt.subplots(nrows=2, ncols=2, figsize=figsize,
             subplot_kw={'projection': sp.wcs})
     all_labels = ('AIC', 'AICc', 'BIC', 'Evidence')
     all_data = (-aic, -aicc, -bic, lnz)
@@ -378,53 +489,70 @@ def plot_ncomp_metrics(sp, outname='ncomp_metrics'):
             ] += 1
             im = ax.imshow(nbest, vmin=vmin, vmax=vmax, cmap=NBD_CMAP)
             sp.format_labels_for_grid(ax)
-    plt.tight_layout()
-    plt.subplots_adjust(left=0.15, right=0.95, bottom=0.10, top=0.95)
+            sp.add_field_mask_contours(ax)
+            sp.add_beam(ax)
+    sp.subplots_adjust(left=0.15, right=0.95, bottom=0.10, top=0.95)
     sp.save(outname)
 
 
 def plot_map_props(sp, outname='map_props'):
+    # dimensions (m, p, b, l)
     data = sp.store.hdf['/products/nbest_MAP'][...]
     n_mod, n_params, _, _ = data.shape
     # create plots for each model parameter
+    figsize = sp.get_figsize(nrows=1, ncols=n_mod)
     for ii in range(n_params):
-        fig, axes = plt.subplots(nrows=1, ncols=n_mod, figsize=(6.5, 3.0),
+        fig, axes = plt.subplots(nrows=1, ncols=n_mod, figsize=figsize,
                 subplot_kw={'projection': sp.wcs})
         vmin = np.nanmin(data[:,ii,:,:])
         vmax = np.nanmax(data[:,ii,:,:])
         for jj, ax in enumerate(axes):
             img = data[jj,ii,:,:]
-            im = ax.imshow(img, vmin=vmin, vmax=vmax, cmap=CLR_CMAP)
+            im = ax.imshow(img, vmin=vmin, vmax=vmax, cmap=RNB_CMAP)
             sp.format_labels_for_grid(ax)
-        cax = fig.add_axes([0.89, 0.20, 0.015, 0.75])
+            sp.add_field_mask_contours(ax)
+            sp.add_beam(ax)
+        cax = fig.add_axes([0.92, 0.15, 0.015, 0.8])  # l, b, w, h
         cbar = plt.colorbar(im, cax=cax)
         cbar.minorticks_on()
         cbar.set_label(TEX_LABELS[ii])
-        plt.tight_layout()
-        plt.subplots_adjust(left=0.15, right=0.875, bottom=0.20, top=0.95)
+        sp.subplots_adjust(left=0.09, right=0.9, bottom=0.15, top=0.95)
         sp.save(f'{outname}_par{ii}')
 
 
-def plot_conv_quan_props(sp, quan_ix=4, outname='conv_props'):
-    data = sp.store.hdf['/products/conv_marginals'][:,:,quan_ix,:,:]
+def plot_quan_props(sp, quan_ix=4, outname='props', conv=True):
+    if conv:
+        prefix = 'cpar'
+        # dimensions (b, l)
+        nbest = sp.store.hdf['/products/conv_nbest'][...]
+        # dimensions (r, m, p, M, b, l)
+        data = sp.store.hdf['/products/conv_marginals'][...]
+        data = take_by_components(data, nbest)  # -> (m, p, M, b, l)
+        data = data[:,:,quan_ix,:,:]            # -> (m, p, b, l)
+    else:
+        prefix = 'par'
+        # dimensions (m, p, M, b, l)
+        data = sp.store.hdf['/products/nbest_marginals'][:,:,quan_ix,:,:]
     n_mod, n_params, _, _ = data.shape
     # create plots for each model parameter
     for ii in range(n_params):
-        fig, axes = plt.subplots(nrows=1, ncols=n_mod, figsize=(6.5, 3.0),
+        figsize = sp.get_figsize(nrows=1, ncols=n_mod)
+        fig, axes = plt.subplots(nrows=1, ncols=n_mod, figsize=figsize,
                 subplot_kw={'projection': sp.wcs})
         vmin = np.nanmin(data[:,ii,:,:])
         vmax = np.nanmax(data[:,ii,:,:])
         for jj, ax in enumerate(axes):
             img = data[jj,ii,:,:]
-            im = ax.imshow(img, vmin=vmin, vmax=vmax, cmap=CLR_CMAP)
+            im = ax.imshow(img, vmin=vmin, vmax=vmax, cmap=RNB_CMAP)
             sp.format_labels_for_grid(ax)
-        cax = fig.add_axes([0.89, 0.20, 0.015, 0.75])
+            sp.add_field_mask_contours(ax)
+            sp.add_beam(ax)
+        cax = fig.add_axes([0.92, 0.15, 0.015, 0.8])  # l, b, w, h
         cbar = plt.colorbar(im, cax=cax)
         cbar.minorticks_on()
         cbar.set_label(TEX_LABELS[ii])
-        plt.tight_layout()
-        plt.subplots_adjust(left=0.15, right=0.875, bottom=0.20, top=0.95)
-        sp.save(f'{outname}_quan{quan_ix}_par{ii}')
+        sp.subplots_adjust(left=0.09, right=0.9, bottom=0.15, top=0.95)
+        sp.save(f'{outname}_quan{quan_ix}_{prefix}{ii}')
 
 
 def plot_3d_volume(sp, outname='volume_field_contour'):

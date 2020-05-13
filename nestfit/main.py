@@ -443,6 +443,32 @@ class CubeFitter:
         store.close()
 
 
+def take_by_components(data, comps, axis=0):
+    """
+    Select the elements from the `data` array based on the component mask.
+
+    Parameters
+    ----------
+    data : array-like, dimensions (..., b, l)
+    comps : array-like, dimensions (b, l)
+        Selected number of components. Note that values of -1 are interpreted
+        as no-data.
+    axis : int, default 0
+        Axis in `data` to interpret the values in `comps` over.
+    """
+    take = comps.copy()
+    take[take == -1] = 1
+    take[take ==  0] = 1
+    take -= 1  # number of comp to array index
+    new_axes = list(range(data.ndim - comps.ndim))
+    take = np.expand_dims(take, axis=new_axes)
+    data = np.take_along_axis(data, take, axis=axis)
+    data = np.squeeze(data, axis=axis)
+    mask = comps < 1
+    data[...,mask] = np.nan
+    return data
+
+
 def get_multiproc_indices(shape, nproc):
     lon_ix, lat_ix = np.indices(shape)
     indices = [
