@@ -446,6 +446,8 @@ class CubeFitter:
 def take_by_components(data, comps, axis=0):
     """
     Select the elements from the `data` array based on the component mask.
+    Positions where the component mask is 0 or -1 (NaN sentinel value) are
+    replaced by NaNs.
 
     Parameters
     ----------

@@ -204,6 +204,23 @@ class StorePlotter:
     def save(self, outname, dpi=300):
         save_figure(self.plot_dir/outname, dpi=dpi)
 
+    def get_err_limits(self, par_ix):
+        # dimensions (m, p, M, b, l)
+        data = self.store.hdf['/products/nbest_marginals'][...]
+        d_lo = data[:,par_ix, 9,:,:]  # -1 sigma
+        d_hi = data[:,par_ix,10,:,:]  # +1 sigma
+        data = (d_hi - d_lo) / 2
+        vmin = np.nanmin(data)
+        vmax = np.nanmax(data)
+        return vmin, vmax
+
+    def get_par_limits(self, par_ix, quan_ix=4):
+        # dimensions (m, p, M, b, l)
+        marg = self.store.hdf['/products/nbest_marginals'][:,par_ix,quan_ix,:,:]
+        vmin = np.nanmin(marg)
+        vmax = np.nanmax(marg)
+        return vmin, vmax
+
     def add_beam(self, ax, offset_frac=0.02, loc='upper left', color='cyan'):
         hdr = self.store.read_header()
         scale, _ = self.pixel_scale
@@ -224,7 +241,21 @@ class StorePlotter:
         # The `nbest` array has values equal to -1 where the union of data cubes
         # contains NaNs.
         ax.contour(nbest, levels=[-0.5], colors='black', linewidths=0.7,
-                linestyles='dotted')
+                linestyles='dotted', antialiased=True)
+
+    def add_int_contours(self, ax, levels=4):
+        # dimensions (t, m, b, l)
+        data = self.store.hdf['/products/peak_intensity'][...]
+        data = np.nansum(data[0], axis=0)  # first transition, sum comp.
+        data[data == 0] = np.nan
+        if isinstance(levels, (float, int)):
+            quan = 1 - 1 / 3**np.arange(levels)
+            levels = np.nanquantile(data.flatten(), quan)
+        colors = ['0.8'] + [str(c) for c in np.linspace(0.1, 0, len(levels)-1)]
+        data[np.isnan(data)] = 0
+        ax.contour(data, levels=levels, colors=colors, linewidths=0.5,
+                linestyles='solid', alpha=0.5, antialiased=True)
+        return levels
 
 
 ##############################################################################
@@ -382,6 +413,7 @@ def plot_nbest(sp, outname='nbest'):
     fig, ax = plt.subplots(figsize=sp.get_figsize(), subplot_kw={'projection': sp.wcs})
     im, cbar = sp.imshow_discrete(ax, data, vmin=0, vmax=2)
     cbar.set_label(r'$N_\mathrm{comp}$')
+    sp.add_int_contours(ax)
     sp.add_field_mask_contours(ax)
     sp.add_beam(ax)
     sp.set_labels(ax)
@@ -394,6 +426,7 @@ def plot_conv_nbest(sp, outname='conv_nbest'):
     fig, ax = plt.subplots(figsize=sp.get_figsize(), subplot_kw={'projection': sp.wcs})
     im, cbar = sp.imshow_discrete(ax, data, vmin=0, vmax=2)
     cbar.set_label(r'$N_\mathrm{comp}\ (\mathrm{conv.})$')
+    sp.add_int_contours(ax)
     sp.add_field_mask_contours(ax)
     sp.add_beam(ax)
     sp.set_labels(ax)
@@ -504,12 +537,12 @@ def plot_map_props(sp, outname='map_props'):
     for ii in range(n_params):
         fig, axes = plt.subplots(nrows=1, ncols=n_mod, figsize=figsize,
                 subplot_kw={'projection': sp.wcs})
-        vmin = np.nanmin(data[:,ii,:,:])
-        vmax = np.nanmax(data[:,ii,:,:])
+        vmin, vmax = sp.get_par_limits(ii)
         for jj, ax in enumerate(axes):
             img = data[jj,ii,:,:]
             im = ax.imshow(img, vmin=vmin, vmax=vmax, cmap=RNB_CMAP)
             sp.format_labels_for_grid(ax)
+            sp.add_int_contours(ax)
             sp.add_field_mask_contours(ax)
             sp.add_beam(ax)
         cax = fig.add_axes([0.92, 0.15, 0.015, 0.8])  # l, b, w, h
@@ -539,12 +572,12 @@ def plot_quan_props(sp, quan_ix=4, outname='props', conv=True):
         figsize = sp.get_figsize(nrows=1, ncols=n_mod)
         fig, axes = plt.subplots(nrows=1, ncols=n_mod, figsize=figsize,
                 subplot_kw={'projection': sp.wcs})
-        vmin = np.nanmin(data[:,ii,:,:])
-        vmax = np.nanmax(data[:,ii,:,:])
+        vmin, vmax = sp.get_par_limits(ii, quan_ix=quan_ix)
         for jj, ax in enumerate(axes):
             img = data[jj,ii,:,:]
             im = ax.imshow(img, vmin=vmin, vmax=vmax, cmap=RNB_CMAP)
             sp.format_labels_for_grid(ax)
+            sp.add_int_contours(ax)
             sp.add_field_mask_contours(ax)
             sp.add_beam(ax)
         cax = fig.add_axes([0.92, 0.15, 0.015, 0.8])  # l, b, w, h
@@ -553,6 +586,44 @@ def plot_quan_props(sp, quan_ix=4, outname='props', conv=True):
         cbar.set_label(TEX_LABELS[ii])
         sp.subplots_adjust(left=0.09, right=0.9, bottom=0.15, top=0.95)
         sp.save(f'{outname}_quan{quan_ix}_{prefix}{ii}')
+
+
+def plot_err_props(sp, outname='err', conv=True):
+    if conv:
+        prefix = 'cpar'
+        # dimensions (b, l)
+        nbest = sp.store.hdf['/products/conv_nbest'][...]
+        # dimensions (r, m, p, M, b, l)
+        data = sp.store.hdf['/products/conv_marginals'][...]
+        data = take_by_components(data, nbest)  # -> (m, p, M, b, l)
+    else:
+        prefix = 'par'
+        # dimensions (m, p, M, b, l)
+        data = sp.store.hdf['/products/nbest_marginals'][...]
+    d_lo = data[:,:, 9,:,:]  # -1 sigma
+    d_hi = data[:,:,10,:,:]  # +1 sigma
+    data = (d_hi - d_lo) / 2
+    n_mod, n_params, _, _ = data.shape
+    # create plots for each model parameter
+    for ii in range(n_params):
+        figsize = sp.get_figsize(nrows=1, ncols=n_mod)
+        fig, axes = plt.subplots(nrows=1, ncols=n_mod, figsize=figsize,
+                subplot_kw={'projection': sp.wcs})
+        vmin = 0
+        _, vmax = sp.get_err_limits(ii)
+        for jj, ax in enumerate(axes):
+            img = data[jj,ii,:,:]
+            im = ax.imshow(img, vmin=vmin, vmax=vmax, cmap=RNB_CMAP)
+            sp.format_labels_for_grid(ax)
+            sp.add_int_contours(ax)
+            sp.add_field_mask_contours(ax)
+            sp.add_beam(ax)
+        cax = fig.add_axes([0.92, 0.15, 0.015, 0.8])  # l, b, w, h
+        cbar = plt.colorbar(im, cax=cax)
+        cbar.minorticks_on()
+        cbar.set_label(r'$\delta\!$ ' + TEX_LABELS[ii])
+        sp.subplots_adjust(left=0.09, right=0.9, bottom=0.15, top=0.95)
+        sp.save(f'{outname}_{prefix}{ii}')
 
 
 def plot_3d_volume(sp, outname='volume_field_contour'):
@@ -696,7 +767,6 @@ def test_amm_predict_precision():
         diff = np.log10(np.abs(amm_spec - syn_spec))
         diff[diff < -12] = np.nan
         print(':: max log10(diff)   =', np.nanmax(diff))
-        #import ipdb; ipdb.set_trace()
         ax.plot(syn.varr, diff, 'k-', drawstyle='steps-mid', linewidth=0.7)
         scaled = (
                 amm_spec / amm_spec.max()
