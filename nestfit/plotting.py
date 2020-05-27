@@ -42,7 +42,7 @@ _cmap_list = [(0.5, 0.5, 0.5, 1.0)] + [plt.cm.plasma(i) for i in range(plt.cm.pl
 NBD_CMAP = mpl.colors.LinearSegmentedColormap.from_list(
         'Discrete Plasma', _cmap_list, len(_cmap_list),
 )
-NBD_CMAP.set_bad('0.2')
+NBD_CMAP.set_bad('0.3')
 
 
 ##############################################################################
@@ -83,15 +83,39 @@ def add_discrete_colorbar(ax, vmin=0, vmax=2, orientation='vertical'):
     return cbar
 
 
+class PaddingConfig:
+    def __init__(self,
+            edge_pads=(0.2, 0.1, 0.2, 0.1),
+            adjust_kwargs={'left': 0.12, 'right': 0.92, 'bottom': 0.15, 'top': 0.95},
+            inch_per_pix=1.8e-2,
+            cbar_width=0.7,
+            cbar_dims=(0.92, 0.15, 0.015, 0.8),
+            ):
+        """
+        Parameters
+        ----------
+        edge_pads : tuple
+            Edge paddings in (left, right, bottom, top) in inches
+        adjust_kwargs : dict
+            Dictionary passed to `plt.subplots_adjust`
+        inch_per_pix : number
+        cbar_width : number
+            Axes object width in inches for the colorbar
+        cbar_dims : tuple
+            Axes object dimensions in (left, bottom, width, height) in inches
+        """
+        self.edge_pads = edge_pads
+        self.adjust_kwargs = adjust_kwargs
+        self.inch_per_pix = inch_per_pix
+        self.cbar_width = cbar_width
+        self.cbar_dims = cbar_dims
+
+
 class StorePlotter:
     lon_label = r'$\mathrm{Right\ Ascension\ (J2000)}$'
     lat_label = r'$\mathrm{Declination\ (J2000)}$'
-    cbar_width = 0.7  # inch
-    inch_per_pix = 1.8e-2
-    edge_pads = (0.2, 0.1, 0.2, 0.1)  # (l, r, b, t) inch
-    adjust_kwargs = {'left': 0.12, 'right': 0.92, 'bottom': 0.15, 'top': 0.95}
 
-    def __init__(self, store, plot_dir=''):
+    def __init__(self, store, plot_dir='', pad=None):
         """
         Parameters
         ----------
@@ -102,6 +126,7 @@ class StorePlotter:
         self.header = store.read_header(full=True)
         self.wcs = WCS(store.read_header(full=False))
         self.ncomp_max = store.hdf.attrs['n_max_components']
+        self.pad = PaddingConfig() if pad is None else pad
 
     @property
     def shape(self):
@@ -171,12 +196,12 @@ class StorePlotter:
         return xy[0]*shape[0], xy[1]*shape[1]
 
     def get_figsize(self, colorbar=True, nrows=1, ncols=1):
-        cbar_width = self.cbar_width if colorbar else 0
+        cbar_width = self.pad.cbar_width if colorbar else 0
         w_pix = self.store.hdf.attrs['naxis1']
         h_pix = self.store.hdf.attrs['naxis2']
-        width = w_pix * self.inch_per_pix * ncols + cbar_width
-        height = h_pix * self.inch_per_pix * nrows
-        pad_l, pad_r, pad_b, pad_t = self.edge_pads
+        width = w_pix * self.pad.inch_per_pix * ncols + cbar_width
+        height = h_pix * self.pad.inch_per_pix * nrows
+        pad_l, pad_r, pad_b, pad_t = self.pad.edge_pads
         width += pad_r + pad_r
         height += pad_b + pad_t
         return width, height
@@ -197,7 +222,7 @@ class StorePlotter:
 
     def subplots_adjust(self, **kwargs):
         if not kwargs:
-            kwargs = self.adjust_kwargs
+            kwargs = self.pad.adjust_kwargs
         plt.tight_layout()
         plt.subplots_adjust(**kwargs)
 
@@ -235,6 +260,13 @@ class StorePlotter:
         xy = self.offset_corner_pos(offset_frac, loc=loc)
         ellipse = patches.Ellipse(xy, bmaj, bmin, pa, color=color)
         ax.add_artist(ellipse)
+
+    def add_colorbar(self, fig, im, dims=None):
+        dims = self.pad.cbar_dims if dims is None else dims
+        cax = fig.add_axes(dims)
+        cbar = plt.colorbar(im, cax=cax)
+        cbar.minorticks_on()
+        return cbar
 
     def add_field_mask_contours(self, ax):
         nbest = self.store.hdf['products/nbest'][...]
@@ -333,13 +365,20 @@ def plot_spec_compare(synspec, analyzer, outname='test'):
     save_figure(outname)
 
 
-def plot_corner(group, outname='corner'):
+def plot_corner(group, outname='corner', truths=None):
     ncomp = group.attrs['ncomp']
     par_labels = TEX_LABELS.copy()
     par_labels[3] = r'$\log(N) \ [\log(\mathrm{cm^{-2}})]$'
     n_params = group.attrs['n_params'] // ncomp
     names = get_par_names()
     post = group['posteriors'][...][:,:-2]  # posterior param values
+    if truths is not None:
+        markers = {
+                p: truths[i*ncomp:(i+1)*ncomp]
+                for i, p in zip(range(n_params), get_par_names())
+        }
+    else:
+        markers = None
     # Give each model component parameter set its own sampler object so that
     # each can be over-plotted in its own color.
     samples = [
@@ -359,12 +398,13 @@ def plot_corner(group, outname='corner'):
                 {'lw':2, 'color':'tab:orange'},
                 {'lw':2, 'color':'tab:blue'},
                 {'lw':2, 'color':'tab:green'}],
+            markers=markers,
     )
     fig.export(f'{outname}.pdf')
     plt.close()
 
 
-def plot_multicomp_velo_2corr(group, outname='velo_2corr'):
+def plot_multicomp_velo_2corr(group, outname='velo_2corr', truths=None):
     ncomp = group.attrs['ncomp']
     assert ncomp == 2
     n_params = group.attrs['n_params'] // ncomp
@@ -381,8 +421,14 @@ def plot_multicomp_velo_2corr(group, outname='velo_2corr'):
     fig = gd_plt.get_subplot_plotter()
     x_names = ['v1', 's1']
     y_names = ['v2', 's2']
+    if truths is not None:
+        xmarkers = {k: truths[k] for k in x_names}
+        ymarkers = {k: truths[k] for k in y_names}
+    else:
+        xmarkers, ymarkers = None, None
     fig.rectangle_plot(x_names, y_names, roots=samples, filled=True,
-            line_args={'lw': 2, 'color': 'tab:gray'})
+            line_args={'lw': 2, 'color': 'peru'}, xmarkers=xmarkers,
+            ymarkers=ymarkers)
     fig.export(f'{outname}.pdf')
     plt.close()
 
@@ -451,9 +497,7 @@ def plot_deblend_peak(sp, outname='hf_deblend_peak'):
         sp.format_labels_for_grid(ax)
         sp.add_field_mask_contours(ax)
         sp.add_beam(ax)
-    cax = fig.add_axes([0.92, 0.15, 0.015, 0.8])  # l, b, w, h
-    cbar = plt.colorbar(im, cax=cax)
-    cbar.minorticks_on()
+    cbar = sp.add_colorbar(fig, im)
     cbar.set_label(r'$\mathrm{max}(\tilde{T}_\mathrm{b}) \ [\mathrm{K}]$')
     sp.subplots_adjust(left=0.09, right=0.9, bottom=0.15, top=0.95)
     sp.save(outname)
@@ -489,9 +533,7 @@ def plot_deblend_intintens(sp, vmax=10, outname='hf_deblend_intintens'):
         sp.format_labels_for_grid(ax)
         sp.add_field_mask_contours(ax)
         sp.add_beam(ax)
-    cax = fig.add_axes([0.92, 0.15, 0.015, 0.8])  # l, b, w, h
-    cbar = plt.colorbar(im, cax=cax, extend=extend)
-    cbar.minorticks_on()
+    cbar = sp.add_colorbar(fig, im)
     cbar.set_label(r'$\int \tilde{T}_\mathrm{b} \mathop{}\!\mathrm{d} v \ [\mathrm{K\, km\, s^{-1}}]$')
     sp.subplots_adjust(left=0.09, right=0.9, bottom=0.15, top=0.95)
     sp.save(outname)
@@ -560,8 +602,8 @@ def plot_quan_props(sp, quan_ix=4, outname='props', conv=True):
         nbest = sp.store.hdf['/products/conv_nbest'][...]
         # dimensions (r, m, p, M, b, l)
         data = sp.store.hdf['/products/conv_marginals'][...]
-        data = take_by_components(data, nbest)  # -> (m, p, M, b, l)
-        data = data[:,:,quan_ix,:,:]            # -> (m, p, b, l)
+        data = take_by_components(data, nbest, incl_zero=False)  # -> (m, p, M, b, l)
+        data = data[:,:,quan_ix,:,:]  # -> (m, p, b, l)
     else:
         prefix = 'par'
         # dimensions (m, p, M, b, l)
@@ -580,9 +622,7 @@ def plot_quan_props(sp, quan_ix=4, outname='props', conv=True):
             sp.add_int_contours(ax)
             sp.add_field_mask_contours(ax)
             sp.add_beam(ax)
-        cax = fig.add_axes([0.92, 0.15, 0.015, 0.8])  # l, b, w, h
-        cbar = plt.colorbar(im, cax=cax)
-        cbar.minorticks_on()
+        cbar = sp.add_colorbar(fig, im)
         cbar.set_label(TEX_LABELS[ii])
         sp.subplots_adjust(left=0.09, right=0.9, bottom=0.15, top=0.95)
         sp.save(f'{outname}_quan{quan_ix}_{prefix}{ii}')
@@ -595,7 +635,7 @@ def plot_err_props(sp, outname='err', conv=True):
         nbest = sp.store.hdf['/products/conv_nbest'][...]
         # dimensions (r, m, p, M, b, l)
         data = sp.store.hdf['/products/conv_marginals'][...]
-        data = take_by_components(data, nbest)  # -> (m, p, M, b, l)
+        data = take_by_components(data, nbest, incl_zero=False)  # -> (m, p, M, b, l)
     else:
         prefix = 'par'
         # dimensions (m, p, M, b, l)
@@ -618,9 +658,7 @@ def plot_err_props(sp, outname='err', conv=True):
             sp.add_int_contours(ax)
             sp.add_field_mask_contours(ax)
             sp.add_beam(ax)
-        cax = fig.add_axes([0.92, 0.15, 0.015, 0.8])  # l, b, w, h
-        cbar = plt.colorbar(im, cax=cax)
-        cbar.minorticks_on()
+        cbar = sp.add_colorbar(fig, im)
         cbar.set_label(r'$\delta\!$ ' + TEX_LABELS[ii])
         sp.subplots_adjust(left=0.09, right=0.9, bottom=0.15, top=0.95)
         sp.save(f'{outname}_{prefix}{ii}')

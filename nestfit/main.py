@@ -443,7 +443,7 @@ class CubeFitter:
         store.close()
 
 
-def take_by_components(data, comps, axis=0):
+def take_by_components(data, comps, axis=0, incl_zero=True):
     """
     Select the elements from the `data` array based on the component mask.
     Positions where the component mask is 0 or -1 (NaN sentinel value) are
@@ -457,11 +457,16 @@ def take_by_components(data, comps, axis=0):
         as no-data.
     axis : int, default 0
         Axis in `data` to interpret the values in `comps` over.
+    incl_zero : bool, default True
+        Include null model when taking components
     """
     take = comps.copy()
-    take[take == -1] = 1
-    take[take ==  0] = 1
-    take -= 1  # number of comp to array index
+    if incl_zero:
+        take[take == -1] = 0
+    else:
+        take[take == -1] = 1
+        take[take ==  0] = 1
+        take -= 1  # number of comp to array index
     new_axes = list(range(data.ndim - comps.ndim))
     take = np.expand_dims(take, axis=new_axes)
     data = np.take_along_axis(data, take, axis=axis)
@@ -759,11 +764,13 @@ def convolve_post_pdfs(store, kernel, evid_weight=True):
         # dimensions (b, l)
         nbest = hdf[f'{dpath}/conv_nbest'][...]
         # compute difference between preferred model number and zero.
-        z_best = np.take_along_axis(evid, nbest[np.newaxis,...], axis=0)
-        d_evid = z_best[0,:,:] - evid[0,:,:]
+        z_best = take_by_components(evid[1:,:,:], nbest)
+        d_evid = z_best - evid[0,:,:]
+        # transform to interval [0.0, 1.0]
+        d_evid -= np.nanmin(d_evid)
         d_evid /= np.nanmax(d_evid)
         d_evid = d_evid.reshape((1, 1, 1, 1, *d_evid.shape))
-        # weight the PDF distributions by the evidence delta
+        # weight the PDF distributions by the delta-evidence
         ldata *= d_evid
     # Spatially convolve the (l, b) map for every (model, parameter,
     # histogram) set.

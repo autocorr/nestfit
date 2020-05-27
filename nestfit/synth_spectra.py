@@ -234,29 +234,33 @@ def make_indep_synth_cube(nrows=4096):
 #                                 Tests
 ##############################################################################
 
-def get_test_spectra():
+def get_test_spectra(kind=0):
     freqs = pyspeckit.spectrum.models.ammonia_constants.freq_dict.copy()
     Axis = pyspeckit.spectrum.units.SpectroscopicAxis
     vchan = 0.158  # km/s
     vaxis = np.arange(-30, 30, vchan) * u.km / u.s
     xa11 = Axis(vaxis, velocity_convention='radio', refX=freqs['oneone']).as_unit('Hz')
     xa22 = Axis(vaxis, velocity_convention='radio', refX=freqs['twotwo']).as_unit('Hz')
-    params = np.array([
-        -1.0,  1.5,  # voff
-        10.0, 15.0,  # trot
-         4.0,  6.0,  # tex
-        14.5, 15.0,  # ntot
-         0.3,  0.6,  # sigm
-         0.0,  0.0,  # orth
-    ])
-    #params = np.array([
-    #    -1.0,  1.0,  # voff
-    #    12.0, 12.0,  # trot
-    #     6.0,  6.0,  # tex
-    #    14.5, 14.6,  # ntot
-    #     0.3,  0.3,  # sigm
-    #     0.0,  0.0,  # orth
-    #])
+    if kind == 0:
+        params = np.array([
+            -1.0,  1.5,  # voff
+            10.0, 15.0,  # trot
+             4.0,  6.0,  # tex
+            14.5, 15.0,  # ntot
+             0.3,  0.6,  # sigm
+             0.0,  0.0,  # orth
+        ])
+    elif kind == 1:
+        params = np.array([
+            -1.0,  1.0,  # voff
+            12.0, 12.0,  # trot
+             6.0,  6.0,  # tex
+            14.5, 14.6,  # ntot
+             0.3,  0.3,  # sigm
+             0.0,  0.0,  # orth
+        ])
+    else:
+        raise ValueError(f'Invalid kind "{kind}"')
     spectra = [
             SyntheticSpectrum(xarr, params, noise=0.2, trans_id=i+1, set_seed=True)
             for i, xarr in enumerate((xa11, xa22))
