@@ -6,7 +6,7 @@ import pyspeckit
 from astropy import units as u
 from astropy.io import fits
 
-from nestfit.models.ammonia import AmmoniaSpectrum
+from nestfit.models import ammonia
 
 
 FAKE_KWDS = {
@@ -137,7 +137,13 @@ class SyntheticSpectrum:
     def to_ammspec(self):
         xarr = self.xarr.value.copy()
         data = self.sampled_spec
-        return AmmoniaSpectrum(xarr, data, self.noise, self.trans_id)
+        return ammonia.AmmoniaSpectrum(xarr, data, self.noise, self.trans_id)
+
+    @property
+    def mod_spec(self):
+        amms = self.to_ammspec()
+        ammonia.amm_predict(amms, self.params, cold=self.cold, lte=self.lte)
+        return amms.get_spec()
 
 
 def make_fake_header(data, xarr):

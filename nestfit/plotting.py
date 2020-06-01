@@ -8,17 +8,18 @@ from scipy import special
 import matplotlib as mpl
 from matplotlib import pyplot as plt
 from matplotlib import (patheffects, animation, patches)
+from matplotlib.ticker import AutoMinorLocator
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 import getdist
 from getdist import plots as gd_plt
 import pyspeckit
+from astropy import convolution
 from astropy.wcs import WCS
 
 from nestfit.main import take_by_components
+from nestfit.models import ammonia
 from nestfit.synth_spectra import (SyntheticSpectrum, get_test_spectra)
-from nestfit.models.ammonia import (AmmoniaSpectrum, amm_predict,
-        get_par_names, TEX_LABELS, TEX_LABELS_NU)
 
 
 plt.rc('font', size=10, family='serif')
@@ -72,8 +73,8 @@ def save_figure(filen, dpi=300):
     plt.clf()
 
 
-def add_discrete_colorbar(ax, vmin=0, vmax=2, orientation='vertical'):
-    t_cbar = plt.colorbar(ax, fraction=0.046, pad=0.04)
+def add_discrete_colorbar(im, cax, vmin=0, vmax=2, orientation='vertical'):
+    t_cbar = plt.colorbar(mappable=im, cax=cax)
     t_cbar.ax.clear()
     ticks = np.arange(vmin, vmax+1)
     bounds = np.arange(vmin, vmax+2) - 0.5
@@ -85,30 +86,56 @@ def add_discrete_colorbar(ax, vmin=0, vmax=2, orientation='vertical'):
 
 class PaddingConfig:
     def __init__(self,
-            edge_pads=(0.2, 0.1, 0.2, 0.1),
-            adjust_kwargs={'left': 0.12, 'right': 0.92, 'bottom': 0.15, 'top': 0.95},
+            edge_pads=(0.7, 0.8, 0.6, 0.3),
+            sep_pads=(0.2, 0.2),
+            cbar_width=0.15,
             inch_per_pix=1.8e-2,
-            cbar_width=0.7,
-            cbar_dims=(0.92, 0.15, 0.015, 0.8),
-            ):
+        ):
         """
         Parameters
         ----------
         edge_pads : tuple
-            Edge paddings in (left, right, bottom, top) in inches
-        adjust_kwargs : dict
-            Dictionary passed to `plt.subplots_adjust`
-        inch_per_pix : number
+            Edge paddings in inches for (left, right, bottom, top)
+        sep_pads : tuple
+            Subplot separation paddings in inches for (width, height)
         cbar_width : number
             Axes object width in inches for the colorbar
-        cbar_dims : tuple
-            Axes object dimensions in (left, bottom, width, height) in inches
+        inch_per_pix : number
+            Used to set the base size of the subplot panel
         """
         self.edge_pads = edge_pads
-        self.adjust_kwargs = adjust_kwargs
+        self.sep_pads = sep_pads
         self.inch_per_pix = inch_per_pix
         self.cbar_width = cbar_width
-        self.cbar_dims = cbar_dims
+
+    def get_colorbar_axis(self, ncols=1):
+        fig = plt.gcf()
+        f_w, f_h = fig.get_size_inches()
+        p_l, p_r, p_b, p_t = self.edge_pads
+        p_w, p_h = self.sep_pads
+        # convert absolute lengths in inches into axes fractions
+        left   = 1 - (p_r + self.cbar_width - p_w) / f_w
+        bottom = p_b / f_h
+        width  = self.cbar_width / f_w
+        height = 1 - (p_b + p_t) / f_h
+        return left, bottom, width, height
+
+    def subplots_adjust(self, colorbar=False):
+        fig = plt.gcf()
+        f_w, f_h = fig.get_size_inches()
+        p_l, p_r, p_b, p_t = self.edge_pads
+        p_w, p_h = self.sep_pads
+        # convert absolute lengths in inches into axes fractions
+        left   = p_l / f_w
+        right  = 1 - p_r / f_w
+        bottom = p_b / f_h
+        top    = 1 - p_t / f_h
+        wspace = p_w / f_w
+        hspace = p_h / f_h
+        if colorbar:
+            right -= self.cbar_width / f_w
+        plt.subplots_adjust(left=left, right=right, bottom=bottom, top=top,
+                wspace=wspace, hspace=hspace)
 
 
 class StorePlotter:
@@ -120,6 +147,8 @@ class StorePlotter:
         Parameters
         ----------
         store : HdfStore
+        plot_dir : str
+        pad : PaddingConfig
         """
         self.store = store
         self.plot_dir = Path(plot_dir)
@@ -159,11 +188,6 @@ class StorePlotter:
             raise ValueError(f'Invalid loc: "{loc}"')
         return cx, cy
 
-    def imshow_discrete(self, ax, data, vmin=0, vmax=4):
-        im = ax.imshow(data, vmin=vmin, vmax=vmax, cmap=NBD_CMAP)
-        cbar = add_discrete_colorbar(im, vmin=vmin, vmax=vmax)
-        return im, cbar
-
     def set_lon_label(self, ax, labelpad=0):
         ax.set_xlabel(self.lon_label)
 
@@ -202,13 +226,14 @@ class StorePlotter:
         width = w_pix * self.pad.inch_per_pix * ncols + cbar_width
         height = h_pix * self.pad.inch_per_pix * nrows
         pad_l, pad_r, pad_b, pad_t = self.pad.edge_pads
-        width += pad_r + pad_r
-        height += pad_b + pad_t
+        pad_w, pad_h = self.pad.sep_pads
+        width += pad_l + pad_r + (ncols - 1) * pad_w
+        height += pad_b + pad_t + (nrows - 1) * pad_h
         return width, height
 
     def format_labels_for_grid(self, ax):
         if ax.is_first_col():
-            self.set_lat_label(ax, labelpad=0.8)
+            self.set_lat_label(ax, labelpad=-0.8)
         else:
             wax = ax.coords['dec']
             wax.set_axislabel('')
@@ -220,11 +245,8 @@ class StorePlotter:
             wax.set_axislabel('')
             wax.set_ticklabel_visible(False)
 
-    def subplots_adjust(self, **kwargs):
-        if not kwargs:
-            kwargs = self.pad.adjust_kwargs
-        plt.tight_layout()
-        plt.subplots_adjust(**kwargs)
+    def subplots_adjust(self):
+        self.pad.subplots_adjust()
 
     def save(self, outname, dpi=300):
         save_figure(self.plot_dir/outname, dpi=dpi)
@@ -261,12 +283,23 @@ class StorePlotter:
         ellipse = patches.Ellipse(xy, bmaj, bmin, pa, color=color)
         ax.add_artist(ellipse)
 
-    def add_colorbar(self, fig, im, dims=None):
-        dims = self.pad.cbar_dims if dims is None else dims
+    def make_colorbar_axis(self):
+        dims = self.pad.get_colorbar_axis()
+        fig = plt.gcf()
         cax = fig.add_axes(dims)
+        return cax
+
+    def add_colorbar(self, im):
+        cax = self.make_colorbar_axis()
         cbar = plt.colorbar(im, cax=cax)
         cbar.minorticks_on()
         return cbar
+
+    def imshow_discrete(self, ax, data, vmin=0, vmax=4):
+        im = ax.imshow(data, vmin=vmin, vmax=vmax, cmap=NBD_CMAP)
+        cax = self.make_colorbar_axis()
+        cbar = add_discrete_colorbar(im, cax, vmin=vmin, vmax=vmax)
+        return im, cbar
 
     def add_field_mask_contours(self, ax):
         nbest = self.store.hdf['products/nbest'][...]
@@ -294,88 +327,17 @@ class StorePlotter:
 #                         Individual Plots
 ##############################################################################
 
-def plot_synth_spectra(spectra=None):
-    if spectra is None:
-        spectra = get_test_spectra()
-    fig = plt.figure(figsize=(4, 6))
-    ax0 = plt.subplot2grid((3, 1), (0, 0), rowspan=2)
-    ax1 = plt.subplot2grid((3, 1), (2, 0))
-    ymax = spectra[1].sampled_spec.max() * 1.1
-    ymin = -3 * spectra[1].noise
-    ax0.set_ylim(2*ymin, 2*ymax)
-    ax1.set_ylim(ymin, ymax)
-    axes = [ax0, ax1]
-    for spec, ax in zip(spectra, axes):
-        ax.plot(spec.varr, spec.sampled_spec, color='black',
-                drawstyle='steps-mid', linewidth=0.7)
-        #ax.fill_between(spec.varr, spec.sampled_spec, step='mid',
-        #        edgecolor='none', facecolor='yellow', alpha=0.8)
-        #ax.plot(spec.varr, spec.components.T, '-', color='magenta',
-        #        linewidth=0.7)
-        ax.set_xlim(spec.varr.value.min(), spec.varr.value.max())
-    labels = [r'$\mathrm{NH_3}\, (1,1)$', r'$\mathrm{NH_3}\, (2,2)$']
-    for label, ax in zip(labels, axes):
-        ax.annotate(label, xy=(0.05, 0.85), xycoords='axes fraction')
-    ax.set_xlim(spec.varr.min().value, spec.varr.max().value)
-    ax.set_ylabel(r'$T_\mathrm{b}$')
-    ax.set_xlabel(r'$v_\mathrm{lsr} \ [\mathrm{km\, s^{-1}}]$')
-    plt.tight_layout()
-    plt.savefig(f'plots/test_synthetic_ammonia_spectra.pdf')
-    plt.close('all')
-
-
-def plot_spec_compare(synspec, analyzer, outname='test'):
-    n = synspec[0].ncomp
-    varr = synspec[0].varr
-    fig = plt.figure(figsize=(4, 6))
-    ax0 = plt.subplot2grid((3, 1), (0, 0), rowspan=2)
-    ax1 = plt.subplot2grid((3, 1), (2, 0))
-    ymax = synspec[1].sampled_spec.max() * 1.1
-    ymin = -3 * synspec[1].noise
-    ax0.set_ylim(2*ymin, 2*ymax)
-    ax1.set_ylim(ymin, ymax)
-    axes = [ax0, ax1]
-    ## Comparison of the synthetic spectrum and a draw from the posteriors
-    # observed data
-    for spec, ax in zip(synspec, axes):
-        ax.step(varr, spec.sampled_spec, color='black', linewidth=0.7)
-        ax.step(varr, spec.sampled_spec, color='black', linewidth=0.7)
-        # plot a sub-sample of spectra
-        posteriors = analyzer.get_equal_weighted_posterior()[:,:-1]
-        posteriors = posteriors[::len(posteriors)//30]
-        samples = [
-            SyntheticSpectrum(spec.xarr, row) for row in posteriors
-        ]
-        for sampled_spec in samples:
-            #ax.plot(varr, sampled_spec.components.T, '-', color='red',
-            #        alpha=0.1)
-            ax.plot(varr, sampled_spec.sum_spec, '-', color='red',
-                    alpha=0.1, linewidth=0.5)
-        # individual true components
-        #ax.plot(varr, spec.components.T, '-', color='magenta', linewidth=0.7)
-        # best fit spectrum
-        best_pars = np.array(analyzer.get_best_fit()['parameters'])
-        best_spec = SyntheticSpectrum(varr, best_pars)
-        #ax.plot(varr, spec.sum_spec, '-', color='dogerblue', linewidth=0.7)
-        ax.set_xlim(spec.varr.value.min(), spec.varr.value.max())
-    ax.set_xlabel(r'$v_\mathrm{lsr} \ [\mathrm{km\, s^{-1}}]$')
-    ax.set_ylabel(r'$T_\mathrm{b} \ [\mathrm{K}]$')
-    # save figure
-    plt.tight_layout()
-    save_figure(outname)
-
-
 def plot_corner(group, outname='corner', truths=None):
     ncomp = group.attrs['ncomp']
-    par_labels = TEX_LABELS.copy()
+    par_labels = ammonia.TEX_LABELS.copy()
     par_labels[3] = r'$\log(N) \ [\log(\mathrm{cm^{-2}})]$'
     n_params = group.attrs['n_params'] // ncomp
-    names = get_par_names()
+    names = ammonia.get_par_names()
     post = group['posteriors'][...][:,:-2]  # posterior param values
     if truths is not None:
         markers = {
                 p: truths[i*ncomp:(i+1)*ncomp]
-                for i, p in zip(range(n_params), get_par_names())
+                for i, p in zip(range(n_params), ammonia.get_par_names())
         }
     else:
         markers = None
@@ -409,7 +371,7 @@ def plot_multicomp_velo_2corr(group, outname='velo_2corr', truths=None):
     assert ncomp == 2
     n_params = group.attrs['n_params'] // ncomp
     post = group['posteriors'][...][:,:-2]  # param values
-    names = get_par_names(ncomp)
+    names = ammonia.get_par_names(ncomp)
     par_labels = [''] * 12
     par_labels[0] = r'$v_\mathrm{lsr}\, (1) \ [\mathrm{km\,s^{-1}}]$'
     par_labels[1] = r'$v_\mathrm{lsr}\, (2) \ [\mathrm{km\,s^{-1}}]$'
@@ -445,7 +407,7 @@ def plot_evdiff(sp, outname='evdiff', conv=True):
     im = ax.imshow(data, vmin=-3, vmax=3, cmap=CLR_CMAP)
     ax.contourf(data, levels=[3, 11, np.nanmax(data)],
             colors=['forestgreen', 'limegreen'])
-    cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    cbar = sp.add_colorbar(im)
     cbar.set_label(r'$\log \mathcal{Z}_1 / \mathcal{Z}_0$')
     sp.add_field_mask_contours(ax)
     sp.add_beam(ax)
@@ -497,9 +459,9 @@ def plot_deblend_peak(sp, outname='hf_deblend_peak'):
         sp.format_labels_for_grid(ax)
         sp.add_field_mask_contours(ax)
         sp.add_beam(ax)
-    cbar = sp.add_colorbar(fig, im)
+    cbar = sp.add_colorbar(im)
     cbar.set_label(r'$\mathrm{max}(\tilde{T}_\mathrm{b}) \ [\mathrm{K}]$')
-    sp.subplots_adjust(left=0.09, right=0.9, bottom=0.15, top=0.95)
+    sp.subplots_adjust()
     sp.save(outname)
 
 
@@ -533,9 +495,9 @@ def plot_deblend_intintens(sp, vmax=10, outname='hf_deblend_intintens'):
         sp.format_labels_for_grid(ax)
         sp.add_field_mask_contours(ax)
         sp.add_beam(ax)
-    cbar = sp.add_colorbar(fig, im)
+    cbar = sp.add_colorbar(im)
     cbar.set_label(r'$\int \tilde{T}_\mathrm{b} \mathop{}\!\mathrm{d} v \ [\mathrm{K\, km\, s^{-1}}]$')
-    sp.subplots_adjust(left=0.09, right=0.9, bottom=0.15, top=0.95)
+    sp.subplots_adjust()
     sp.save(outname)
 
 
@@ -566,7 +528,7 @@ def plot_ncomp_metrics(sp, outname='ncomp_metrics'):
             sp.format_labels_for_grid(ax)
             sp.add_field_mask_contours(ax)
             sp.add_beam(ax)
-    sp.subplots_adjust(left=0.15, right=0.95, bottom=0.10, top=0.95)
+    sp.subplots_adjust()
     sp.save(outname)
 
 
@@ -587,11 +549,10 @@ def plot_map_props(sp, outname='map_props'):
             sp.add_int_contours(ax)
             sp.add_field_mask_contours(ax)
             sp.add_beam(ax)
-        cax = fig.add_axes([0.92, 0.15, 0.015, 0.8])  # l, b, w, h
-        cbar = plt.colorbar(im, cax=cax)
+        cbar = sp.add_colorbar(im)
         cbar.minorticks_on()
-        cbar.set_label(TEX_LABELS[ii])
-        sp.subplots_adjust(left=0.09, right=0.9, bottom=0.15, top=0.95)
+        cbar.set_label(ammonia.TEX_LABELS[ii])
+        sp.subplots_adjust()
         sp.save(f'{outname}_par{ii}')
 
 
@@ -622,9 +583,9 @@ def plot_quan_props(sp, quan_ix=4, outname='props', conv=True):
             sp.add_int_contours(ax)
             sp.add_field_mask_contours(ax)
             sp.add_beam(ax)
-        cbar = sp.add_colorbar(fig, im)
+        cbar = sp.add_colorbar(im)
         cbar.set_label(TEX_LABELS[ii])
-        sp.subplots_adjust(left=0.09, right=0.9, bottom=0.15, top=0.95)
+        sp.subplots_adjust()
         sp.save(f'{outname}_quan{quan_ix}_{prefix}{ii}')
 
 
@@ -658,9 +619,9 @@ def plot_err_props(sp, outname='err', conv=True):
             sp.add_int_contours(ax)
             sp.add_field_mask_contours(ax)
             sp.add_beam(ax)
-        cbar = sp.add_colorbar(fig, im)
+        cbar = sp.add_colorbar(im)
         cbar.set_label(r'$\delta\!$ ' + TEX_LABELS[ii])
-        sp.subplots_adjust(left=0.09, right=0.9, bottom=0.15, top=0.95)
+        sp.subplots_adjust()
         sp.save(f'{outname}_{prefix}{ii}')
 
 
@@ -676,8 +637,48 @@ def plot_3d_volume(sp, outname='volume_field_contour'):
     mvi.clf()
 
 
+def plot_amm_post_stack(sp, pix, n_model=1, outname='margs', orth=False):
+    i_r = n_model - 1  # to index
+    i_l, i_b = pix
+    group = sp.store.hdf[f'/pix/{i_l}/{i_b}/{n_model}']
+    npar = int(group.attrs['n_params'] / n_model)
+    if not orth:
+        npar -= 1
+    # dimensions (p, h)
+    all_bins = sp.store.hdf['products/pdf_bins'][...]
+    # dimensions (r, m, p, h, b, l) -> (m, p, h)
+    post = sp.store.hdf['products/post_pdfs'][i_r,:,:,:,i_b,i_l]
+    # dimensions (r, m, p, h, b, l) -> (m, p, h)
+    conv = sp.store.hdf['products/conv_post_pdfs'][i_r,:,:,:,i_b,i_l]
+    # dimensionsa (r, m, p, M, b, l) -> (m, p); M=4 median
+    conv_marg = sp.store.hdf['products/conv_marginals'][i_r,:,:,4,i_b,i_l]
+    y_fig = 6 / 5 * npar  # inches
+    fig, axes = plt.subplots(nrows=npar, figsize=(4, y_fig))
+    colors = ['dodgerblue', 'firebrick', 'rebeccapurple', 'seagreen']
+    for i_p, ax in enumerate(axes):
+        bins = all_bins[i_p]
+        for i_n in range(n_model):
+            data  = post[i_n,i_p,:]
+            cdata = conv[i_n,i_p,:]
+            color = colors[i_n]
+            ax.fill_between(bins, data, color=color, alpha=0.5, linewidth=0,
+                    step='mid', zorder=1)
+            ax.plot(bins, cdata, color=color, linewidth=0.7,
+                    drawstyle='steps-mid', zorder=2)
+            ax.axvline(conv_marg[i_n,i_p], color=color, linewidth=0.85,
+                    linestyle='dashed', zorder=3)
+        ax.set_xlim(bins.min(), bins.max())
+        ax.set_ylim(0, 1.1*max(post[:,i_p,:].max(), conv[:,i_p,:].max()))
+        ax.set_xlabel(ammonia.TEX_LABELS[i_p])
+        ax.xaxis.set_ticks_position('bottom')
+        ax.yaxis.set_ticks_position('left')
+    ax.set_ylabel('PDF')
+    plt.tight_layout(h_pad=0.5)
+    sp.save(f'{outname}_{i_l}_{i_b}_{n_model}')
+
+
 def plot_amm_specfit(sp, stack, pix, n_model=1, outname='specfit', cold=False,
-        kind='map', zoom=False):
+        kind='map', zoom=False, dv=31):
     assert kind in ('map', 'bestfit')
     lon_pix, lat_pix = pix
     group = sp.store.hdf[f'/pix/{lon_pix}/{lat_pix}/{n_model}']
@@ -685,32 +686,39 @@ def plot_amm_specfit(sp, stack, pix, n_model=1, outname='specfit', cold=False,
     print(params)
     obs_spec = stack.get_arrays(*pix)
     xarrs = get_amm_psk_xarrs(stack)
-    syn_spec = [SyntheticSpectrum(x, params, cold=cold) for x in xarrs]
-    fig = plt.figure(figsize=(4, 5))
-    ax0 = plt.subplot2grid((3, 1), (0, 0), rowspan=2)
-    ax1 = plt.subplot2grid((3, 1), (2, 0))
-    axes = (ax0, ax1)
+    syn_spec = [
+            SyntheticSpectrum(x, params, trans_id=i+1, cold=cold)
+            for i, x in enumerate(xarrs)
+    ]
+    fig, axes = plt.subplots(nrows=2, sharex=True, sharey=True, figsize=(4, 3.5))
     for data, xarr, model, ax in zip(obs_spec, xarrs, syn_spec, axes):
         varr = model.varr
         ax.fill_between(varr, data, np.zeros_like(data), color='yellow',
                 edgecolor='none', alpha=0.5)
         ax.plot(varr, data, 'k-', linewidth=0.7, drawstyle='steps-mid')
+        # FIXME replace components with `models.ammonia` versus pyspeckit
+        # (slight difference due to updated constants)
         ax.plot(varr, model.components.T, '-', color='magenta', linewidth=1.0, alpha=0.5)
-        ax.plot(varr, model.sum_spec, '-', color='red', linewidth=1.0,
+        ax.plot(varr, model.mod_spec, '-', color='red', linewidth=1.0,
                 drawstyle='steps-mid')
         ax.set_xlim(varr.value.min(), varr.value.max())
     if zoom:
-        axes[0].set_xlim(-7, 7)
-        axes[1].set_xlim(-7, 7)
-    ymin = obs_spec[0].min() * 1.1
-    ymax = obs_spec[0].max() * 1.1
+        vcen = ((varr[0] + varr[-1]) / 2).value
+        axes[0].set_xlim(vcen-dv, vcen+dv)
+        axes[1].set_xlim(vcen-dv, vcen+dv)
+    ymin = 1.1 * obs_spec[0].min()
+    ymax = 1.1 * obs_spec[0].max()
     axes[0].set_ylim(ymin, ymax)
-    axes[1].set_ylim(ymin*0.4-0.5, ymax*0.4-0.5)
     axes[1].set_xlabel(r'$v_\mathrm{lsr} \ [\mathrm{km\, s^{-1}}]$')
     axes[1].set_ylabel(r'$T_\mathrm{mb} \ [\mathrm{K}]$')
-    axes[0].annotate(r'$\mathrm{NH_3}\, (1,1)$', (0.03, 0.91), xycoords='axes fraction')
+    axes[0].annotate(r'$\mathrm{NH_3}\, (1,1)$', (0.03, 0.80), xycoords='axes fraction')
     axes[1].annotate(r'$\mathrm{NH_3}\, (2,2)$', (0.03, 0.80), xycoords='axes fraction')
-    plt.tight_layout()
+    for ax in axes:
+        ax.xaxis.set_minor_locator(AutoMinorLocator(5))
+        ax.xaxis.set_tick_params(which='minor', bottom='on')
+        ax.yaxis.set_minor_locator(AutoMinorLocator(5))
+        ax.yaxis.set_tick_params(which='minor', left='on')
+    plt.tight_layout(h_pad=0.5)
     sp.save(f'{outname}_{lon_pix}_{lat_pix}_{n_model}')
 
 
@@ -789,13 +797,124 @@ def plot_amm_specfit_nsrun(sp, stack, pix, n_model=1, n_draw=50,
     ani.save(str(out_path), writer='ffmpeg', dpi=300)
 
 
+def plot_amm_spec_grid(sp, stack, pix, half_width, outname='specgrid',
+        i_trans=0, nsmooth=2, vwin=10):
+    nsmooth = int(nsmooth)
+    # center pixel
+    lon_pix, lat_pix = pix
+    # radius for <-R- C -R->
+    rlon, rlat = half_width
+    # grid shape
+    dlon, dlat = 2*rlon+1, 2*rlat+1
+    stamp_size = 0.3   # in
+    stamp_sep  = 0.05  # in
+    varr = get_amm_psk_xarrs(stack)[i_trans].as_unit('km/s').value
+    vcen = (varr[0] + varr[-1]) / 2
+    vmask = (varr > vcen - vwin / 2) & (varr < vcen + vwin / 2)
+    # dimensions (m, p, b, l)
+    map_params = sp.store.hdf['/products/nbest_MAP'][...]
+    ncomp = map_params.shape[0]
+    figsize = (
+            stamp_size * dlon + stamp_sep * (dlon + 1),
+            stamp_size * dlat + stamp_sep * (dlat + 1),
+    )
+    fig, axes = plt.subplots(nrows=dlat, ncols=dlon, sharex=True, sharey=True,
+            figsize=figsize)
+    plt.subplots_adjust(
+            left=stamp_sep/figsize[0],
+            bottom=stamp_sep/figsize[1],
+            right=1-stamp_sep/figsize[0],
+            top=1-stamp_sep/figsize[1],
+            wspace=stamp_sep/stamp_size,
+            hspace=stamp_sep/stamp_size,
+    )
+    colors = ['dodgerblue', 'firebrick', 'rebeccapurple', 'seagreen']
+    ymax = 0
+    def smooth_spec(x):
+        kernel = convolution.Box1DKernel(nsmooth)
+        return convolution.convolve(x, kernel)
+    for i_ax, i_l in enumerate(range(lon_pix-rlon, lon_pix+rlon+1)):
+        for j_ax, i_b in enumerate(range(lat_pix-rlat, lat_pix+rlat+1)):
+            ax = axes[-j_ax-1, i_ax]
+            *spec_data, has_nans = stack.cubes[i_trans].get_spec_data(i_l, i_b)
+            if has_nans:
+                continue
+            xarr, obs_data, noise, trans_id = spec_data
+            amms = ammonia.AmmoniaSpectrum(*spec_data)
+            local_ymax = np.nanmax(obs_data)
+            if local_ymax > ymax:
+                ymax = local_ymax
+            # TODO draw velocity and intensity reference markers
+            # draw observed spectrum
+            c_obs_data = smooth_spec(obs_data)
+            ax.plot(varr[vmask][::nsmooth], obs_data[vmask][::nsmooth],
+                    color='black', linewidth=0.5, zorder=10)
+            # draw model component fits
+            last_spec = np.zeros_like(obs_data)
+            this_spec = np.zeros_like(obs_data)
+            for i_m in range(ncomp):
+                params = map_params[i_m,:,i_b,i_l].copy()
+                if np.isnan(params).any():
+                    continue
+                ammonia.amm_predict(amms, params)
+                mod_spec = amms.get_spec()
+                c_mod_spec = smooth_spec(mod_spec)
+                this_spec = this_spec + c_mod_spec
+                x = varr[vmask][::nsmooth]
+                y = this_spec[vmask][::nsmooth]
+                y2 = last_spec[vmask][::nsmooth]
+                ax.fill_between(x, y, y2, edgecolor='none',
+                        facecolor=colors[i_m], zorder=i_m)
+                last_spec = this_spec
+            # hide axis spines, ticks, and labels
+            ax.axis('off')
+    print(ymax)
+    ax.set_xlim(vcen-vwin/2, vcen+vwin/2)
+    ax.set_ylim(-2*noise, ymax)
+    sp.save(f'{outname}_{lon_pix}_{lat_pix}_{dlon}x{dlat}')
+
+
+##############################################################################
+#                          Tests and Verification
+##############################################################################
+
+def test_plot_synth_spectra(spectra=None):
+    if spectra is None:
+        spectra = get_test_spectra()
+    fig = plt.figure(figsize=(4, 6))
+    ax0 = plt.subplot2grid((3, 1), (0, 0), rowspan=2)
+    ax1 = plt.subplot2grid((3, 1), (2, 0))
+    ymax = spectra[1].sampled_spec.max() * 1.1
+    ymin = -3 * spectra[1].noise
+    ax0.set_ylim(2*ymin, 2*ymax)
+    ax1.set_ylim(ymin, ymax)
+    axes = [ax0, ax1]
+    for spec, ax in zip(spectra, axes):
+        ax.plot(spec.varr, spec.sampled_spec, color='black',
+                drawstyle='steps-mid', linewidth=0.7)
+        #ax.fill_between(spec.varr, spec.sampled_spec, step='mid',
+        #        edgecolor='none', facecolor='yellow', alpha=0.8)
+        #ax.plot(spec.varr, spec.components.T, '-', color='magenta',
+        #        linewidth=0.7)
+        ax.set_xlim(spec.varr.value.min(), spec.varr.value.max())
+    labels = [r'$\mathrm{NH_3}\, (1,1)$', r'$\mathrm{NH_3}\, (2,2)$']
+    for label, ax in zip(labels, axes):
+        ax.annotate(label, xy=(0.05, 0.85), xycoords='axes fraction')
+    ax.set_xlim(spec.varr.min().value, spec.varr.max().value)
+    ax.set_ylabel(r'$T_\mathrm{b}$')
+    ax.set_xlabel(r'$v_\mathrm{lsr} \ [\mathrm{km\, s^{-1}}]$')
+    plt.tight_layout()
+    plt.savefig(f'plots/test_synthetic_ammonia_spectra.pdf')
+    plt.close('all')
+
+
 def test_amm_predict_precision():
     spectra = get_test_spectra()
     fig, axes = plt.subplots(nrows=2, sharex=True, sharey=True, figsize=(4, 3))
     for i, (syn, ax) in enumerate(zip(spectra, axes)):
         amms = syn.to_ammspec()
         params = syn.params
-        amm_predict(amms, params)
+        ammonia.amm_predict(amms, params)
         amm_spec = amms.get_spec()
         syn_spec = syn.sum_spec
         is_close = np.allclose(amm_spec, syn_spec, rtol=1e-8, atol=1e-5)
