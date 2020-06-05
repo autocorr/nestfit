@@ -596,6 +596,47 @@ def convolve_evidence(store, kernel):
     store.create_dataset('conv_evidence', cdata, group=dpath)
 
 
+def extended_masked_evidence(store, kernel, conv=True, lnz_thresh=3):
+    """
+    Mask the local or convolved evidence maps on a threshold for a second
+    convolution to identify weak spatially extended features. Products include:
+        * 'mext_evidence_diff' (b, l)
+
+    Parameters
+    ----------
+    store : HdfStore
+    kernel : number or `astropy.convolution.Kernel2D`
+        Either a kernel instance or a number defining the standard deviation in
+        map pixels of a Gaussian convolution kernel.
+    conv : bool
+        Use the convolved (`conv_evidence`) versus the local evidence (`evidence`)
+    lnz_thresh : number
+        Threshold to mask the initial evidence map on.
+    """
+    print(':: Convolving masked evidence')
+    if isinstance(kernel, (int, float)):
+        kernel = convolution.Gaussian2DKernel(kernel)
+    hdf = store.hdf
+    dpath = store.dpath
+    # dimensions (m, b, l)
+    data = hdf[f'{dpath}/evidence'][...]
+    # dimensions (m, b, l)
+    ev_name = 'conv_evidence' if conv else 'evidence'
+    mdata = hdf[f'{dpath}/{ev_name}'][...]
+    mdata = mdata[1] - mdata[0]
+    mask = mdata > lnz_thresh
+    # Spatially convolve the masked evidence values with the new kernel.
+    cdata = nans(data.shape)
+    for i in range(data.shape[0]):
+        data[i,mask] = np.nan
+        cdata[i,:,:] = convolution.convolve(data[i,:,:], kernel, boundary='extend')
+    mext = cdata[1] - cdata[0]
+    # refill the NaN values after the convolution interpolates over them
+    mext[np.isnan(mdata) | mask] = np.nan
+    # dimensions (b, l)
+    store.create_dataset('mext_evidence', mext, group=dpath)
+
+
 def aggregate_run_products(store):
     """
     Aggregate the results from the individual per-pixel Nested Sampling runs

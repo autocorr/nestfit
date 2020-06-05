@@ -416,6 +416,26 @@ def plot_evdiff(sp, outname='evdiff', conv=True):
     sp.save(f'{outname}_{prefix}')
 
 
+def plot_mext_evdiff(sp, outname='mext_evdiff', conv=True):
+    mext = sp.store.hdf['/products/mext_evidence'][...]
+    if conv:
+        evid = sp.store.hdf['/products/conv_evidence'][...]
+    else:
+        evid = sp.store.hdf['/products/evidence'][...]
+    diff = evid[1] - evid[0]
+    fig, ax = plt.subplots(figsize=sp.get_figsize(), subplot_kw={'projection': sp.wcs})
+    im = ax.imshow(mext, vmin=-3, vmax=3, cmap=CLR_CMAP)
+    ax.contourf(diff, levels=[3, 11, np.nanmax(diff)],
+            colors=['forestgreen', 'limegreen'])
+    cbar = sp.add_colorbar(im)
+    cbar.set_label(r'$\log \mathcal{Z}_1 / \mathcal{Z}_0$')
+    sp.add_field_mask_contours(ax)
+    sp.add_beam(ax)
+    sp.set_labels(ax)
+    sp.subplots_adjust()
+    sp.save(f'{outname}')
+
+
 def plot_nbest(sp, outname='nbest'):
     data = sp.store.hdf['/products/nbest']
     fig, ax = plt.subplots(figsize=sp.get_figsize(), subplot_kw={'projection': sp.wcs})
@@ -584,7 +604,7 @@ def plot_quan_props(sp, quan_ix=4, outname='props', conv=True):
             sp.add_field_mask_contours(ax)
             sp.add_beam(ax)
         cbar = sp.add_colorbar(im)
-        cbar.set_label(TEX_LABELS[ii])
+        cbar.set_label(ammonia.TEX_LABELS[ii])
         sp.subplots_adjust()
         sp.save(f'{outname}_quan{quan_ix}_{prefix}{ii}')
 
@@ -620,7 +640,7 @@ def plot_err_props(sp, outname='err', conv=True):
             sp.add_field_mask_contours(ax)
             sp.add_beam(ax)
         cbar = sp.add_colorbar(im)
-        cbar.set_label(r'$\delta\!$ ' + TEX_LABELS[ii])
+        cbar.set_label(r'$\delta\!$ ' + ammonia.TEX_LABELS[ii])
         sp.subplots_adjust()
         sp.save(f'{outname}_{prefix}{ii}')
 

@@ -31,6 +31,7 @@ from nestfit.main import (
         CubeFitter,
         aggregate_run_attributes,
         convolve_evidence,
+        extended_masked_evidence,
         aggregate_run_products,
         aggregate_run_pdfs,
         convolve_post_pdfs,
