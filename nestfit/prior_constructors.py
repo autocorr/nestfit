@@ -65,7 +65,7 @@ def get_irdc_priors(size=500, vsys=0.0):
             ResolvedPlacementPrior(
                 Prior(d_voff, 0),
                 Prior(d_sigm, 4),
-                scale=1.5,
+                scale=1.2,
             ),
             Prior(d_trot, 1),
             Prior(d_tex,  2),

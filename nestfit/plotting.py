@@ -898,32 +898,40 @@ def plot_amm_spec_grid(sp, stack, pix, half_width, outname='specgrid',
 #                          Tests and Verification
 ##############################################################################
 
-def test_plot_synth_spectra(spectra=None):
+def test_plot_synth_spectra(spectra=None, group=None):
     if spectra is None:
         spectra = get_test_spectra()
-    fig = plt.figure(figsize=(4, 6))
-    ax0 = plt.subplot2grid((3, 1), (0, 0), rowspan=2)
-    ax1 = plt.subplot2grid((3, 1), (2, 0))
-    ymax = spectra[1].sampled_spec.max() * 1.1
-    ymin = -3 * spectra[1].noise
-    ax0.set_ylim(2*ymin, 2*ymax)
-    ax1.set_ylim(ymin, ymax)
-    axes = [ax0, ax1]
+    fig, axes = plt.subplots(nrows=2, sharex=True, sharey=True, figsize=(4, 3.5))
     for spec, ax in zip(spectra, axes):
+        ax.fill_between(spec.varr, spec.sampled_spec, step='mid',
+                edgecolor='none', facecolor='yellow', alpha=0.5)
         ax.plot(spec.varr, spec.sampled_spec, color='black',
                 drawstyle='steps-mid', linewidth=0.7)
-        #ax.fill_between(spec.varr, spec.sampled_spec, step='mid',
-        #        edgecolor='none', facecolor='yellow', alpha=0.8)
-        #ax.plot(spec.varr, spec.components.T, '-', color='magenta',
-        #        linewidth=0.7)
-        ax.set_xlim(spec.varr.value.min(), spec.varr.value.max())
-    labels = [r'$\mathrm{NH_3}\, (1,1)$', r'$\mathrm{NH_3}\, (2,2)$']
-    for label, ax in zip(labels, axes):
-        ax.annotate(label, xy=(0.05, 0.85), xycoords='axes fraction')
-    ax.set_xlim(spec.varr.min().value, spec.varr.max().value)
-    ax.set_ylabel(r'$T_\mathrm{b}$')
+        ax.plot(spec.varr, spec.components.T, color='magenta',
+                linewidth=1.0, alpha=0.5)
+        ax.plot(spec.varr, spec.sum_spec, color='deepskyblue',
+                linewidth=1.2)
+        if group is not None:
+            params = group['map_params'][...]
+            fit_spec = SyntheticSpectrum(spec.xarr, params)
+            #ax.plot(fit_spec.varr, fit_spec.components.T, color='red',
+            #        linewidth=1.0)
+            ax.plot(fit_spec.varr, fit_spec.sum_spec, color='red',
+                    linewidth=1.2)
+    axes[0].annotate(r'$\mathrm{NH_3}\, (1,1)$', xy=(0.04, 0.80),
+            xycoords='axes fraction')
+    axes[1].annotate(r'$\mathrm{NH_3}\, (2,2)$', xy=(0.04, 0.80),
+            xycoords='axes fraction')
+    for ax in axes:
+        ax.xaxis.set_minor_locator(AutoMinorLocator(5))
+        ax.xaxis.set_tick_params(which='minor', bottom='on')
+        ax.yaxis.set_minor_locator(AutoMinorLocator(5))
+        ax.yaxis.set_tick_params(which='minor', left='on')
+    ax.set_xlim(-30, 30)
+    ax.set_ylim(-0.5, 4.0)
+    ax.set_ylabel(r'$T_\mathrm{b} \ [\mathrm{K}]$')
     ax.set_xlabel(r'$v_\mathrm{lsr} \ [\mathrm{km\, s^{-1}}]$')
-    plt.tight_layout()
+    plt.tight_layout(h_pad=0.5)
     plt.savefig(f'plots/test_synthetic_ammonia_spectra.pdf')
     plt.close('all')
 

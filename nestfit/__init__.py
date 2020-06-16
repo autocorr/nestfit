@@ -29,6 +29,8 @@ from nestfit.main import (
         CubeStack,
         HdfStore,
         CubeFitter,
+        apply_circular_mask,
+        get_indep_info_kernel,
         aggregate_run_attributes,
         convolve_evidence,
         extended_masked_evidence,

@@ -485,6 +485,96 @@ def get_multiproc_indices(shape, nproc):
     return indices
 
 
+def apply_circular_mask(kernel, radius=None):
+    """
+    Weight the kernel based on a sub-pixel exact solution for a uniform
+    circular aperture.
+
+    Parameters
+    ----------
+    kernel : array-like
+        Kernel array to mask. Must be odd in both dimensions.
+    radius : number
+        Radius in pixels as defined from the mid-point of the center pixel.
+        Does not need to be an integer. If `None` extend to limit of smallest
+        axis.
+    """
+    nx, ny = kernel.shape
+    if radius is None:
+        radius = min(nx, ny) / 2
+    # return unchanged mask if radius larger than kernel size
+    corner_dist = np.sqrt((nx / 2)**2 + (ny / 2)**2)
+    if radius > corner_dist:
+        return kernel
+    # kernel is only valid if odd shaped
+    if nx % 2 == 0 or ny % 2 == 0:
+        raise ValueError(f'Kernel dimensions must be odd: ({nx}, {ny})')
+    try:
+        from photutils.geometry.circular_overlap import circular_overlap_grid
+    except ImportError:
+        raise ImportError('Must have "photutils" installed.')
+    xmin = -nx / 2
+    xmax =  ny / 2
+    ymin = -ny / 2
+    ymax =  ny / 2
+    use_exact = True
+    subpixels = 5
+    weights = circular_overlap_grid(xmin, xmax, ymin, ymax, nx, ny, radius,
+            use_exact, subpixels)
+    return weights * kernel
+
+
+def get_indep_info_kernel(sigma, nrad=1, sigma_taper=None):
+    """
+    Create a kernel for the amount of information independent of the center
+    pixel position based on a Gaussian beam. Kernel is odd-shaped.
+
+    Parameters
+    ----------
+    sigma : number
+        Gaussian standard deviation in pixels. Currently implemented for a
+        symmetric beam.
+    nrad : int
+        Radius of square from center pixel. Kernels dimensions are (2*nrad+1).
+    sigma_taper : number
+        Taper for downweighting large radii in the kernel. Standard deviation
+        of the tapering kernel in pixels. If `None` apply no taper.
+    """
+    # TODO implement a full beam profile with major, minor, and pa
+    assert isinstance(nrad, int) and nrad >= 0
+    if nrad == 0:
+        return np.array([[1.0]])
+    ppbeam = 2 * np.pi * sigma**2
+    # If the beam is smaller than a pixel, then unit information is still 1.
+    ppbeam = max(1, ppbeam)
+    i_n = 2 * nrad + 1
+    Y, X = np.indices((i_n, i_n))
+    X -= nrad
+    Y -= nrad
+    # Compute values from Gaussian function at pixel mid-point
+    #kernel = 1 - np.exp(-0.5 * (X**2 + Y**2) / sigma**2)
+    #kernel /= ppbeam
+    #kernel[nrad, nrad] = 1
+    #return kernel
+    # Calculate bin edge boundaries
+    X_lo = X - 0.5
+    X_hi = X + 0.5
+    Y_lo = Y - 0.5
+    Y_hi = Y + 0.5
+    # Integrate the beam profile over the pixel boundaries
+    def phi(z):
+        """Cumulative of the unit normal distribution"""
+        return 0.5 * (1 + sp.special.erf(z / sigma / np.sqrt(2)))
+    # Peak Gaussian amplitude factor, volume is the same over a 1x1 pixel
+    peak_amp = 1 / (2 * np.pi * sigma**2)
+    kernel = 1 - (phi(X_hi) - phi(X_lo)) * (phi(Y_hi) - phi(Y_lo)) / peak_amp
+    kernel /= ppbeam
+    if sigma_taper is not None:
+        kernel *= np.exp(-0.5 * (X**2 + Y**2) / sigma_taper**2)
+    kernel[nrad, nrad] = 1
+    return kernel
+
+
 def aggregate_run_attributes(store):
     """
     Aggregate the attribute values into a dense array from the individual
