@@ -17,7 +17,8 @@ import pyspeckit
 from astropy import convolution
 from astropy.wcs import WCS
 
-from nestfit.main import take_by_components
+from nestfit.main import (take_by_components, apply_circular_mask,
+        get_indep_info_kernel)
 from nestfit.models import ammonia
 from nestfit.synth_spectra import (SyntheticSpectrum, get_test_spectra)
 
@@ -324,76 +325,8 @@ class StorePlotter:
 
 
 ##############################################################################
-#                         Individual Plots
+#                           Store Plotter Plots
 ##############################################################################
-
-def plot_corner(group, outname='corner', truths=None):
-    ncomp = group.attrs['ncomp']
-    par_labels = ammonia.TEX_LABELS.copy()
-    par_labels[3] = r'$\log(N) \ [\log(\mathrm{cm^{-2}})]$'
-    n_params = group.attrs['n_params'] // ncomp
-    names = ammonia.get_par_names()
-    post = group['posteriors'][...][:,:-2]  # posterior param values
-    if truths is not None:
-        markers = {
-                p: truths[i*ncomp:(i+1)*ncomp]
-                for i, p in zip(range(n_params), ammonia.get_par_names())
-        }
-    else:
-        markers = None
-    # Give each model component parameter set its own sampler object so that
-    # each can be over-plotted in its own color.
-    samples = [
-            getdist.MCSamples(
-                samples=post[:,ii::ncomp],
-                names=names,
-                labels=par_labels,
-                label=f'Component {ii+1}',
-                name_tag=f'{ii}',
-                sampler='nested')
-            for ii in range(ncomp)
-    ]
-    [s.updateSettings({'contours': [0.68, 0.90]}) for s in samples]
-    fig = gd_plt.get_subplot_plotter()
-    fig.triangle_plot(samples, filled=True,
-            line_args=[
-                {'lw':2, 'color':'tab:orange'},
-                {'lw':2, 'color':'tab:blue'},
-                {'lw':2, 'color':'tab:green'}],
-            markers=markers,
-    )
-    fig.export(f'{outname}.pdf')
-    plt.close()
-
-
-def plot_multicomp_velo_2corr(group, outname='velo_2corr', truths=None):
-    ncomp = group.attrs['ncomp']
-    assert ncomp == 2
-    n_params = group.attrs['n_params'] // ncomp
-    post = group['posteriors'][...][:,:-2]  # param values
-    names = ammonia.get_par_names(ncomp)
-    par_labels = [''] * 12
-    par_labels[0] = r'$v_\mathrm{lsr}\, (1) \ [\mathrm{km\,s^{-1}}]$'
-    par_labels[1] = r'$v_\mathrm{lsr}\, (2) \ [\mathrm{km\,s^{-1}}]$'
-    par_labels[8] = r'$\sigma_\mathrm{v}\, (1) \ [\mathrm{km\,s^{-1}}]$'
-    par_labels[9] = r'$\sigma_\mathrm{v}\, (2) \ [\mathrm{km\,s^{-1}}]$'
-    samples = getdist.MCSamples(samples=post, names=names, labels=par_labels,
-            sampler='nested')
-    samples.updateSettings({'contours': [0.68, 0.90]})
-    fig = gd_plt.get_subplot_plotter()
-    x_names = ['v1', 's1']
-    y_names = ['v2', 's2']
-    if truths is not None:
-        xmarkers = {k: truths[k] for k in x_names}
-        ymarkers = {k: truths[k] for k in y_names}
-    else:
-        xmarkers, ymarkers = None, None
-    fig.rectangle_plot(x_names, y_names, roots=samples, filled=True,
-            line_args={'lw': 2, 'color': 'peru'}, xmarkers=xmarkers,
-            ymarkers=ymarkers)
-    fig.export(f'{outname}.pdf')
-    plt.close()
-
 
 def plot_evdiff(sp, outname='evdiff', conv=True):
     if conv:
@@ -892,6 +825,105 @@ def plot_amm_spec_grid(sp, stack, pix, half_width, outname='specgrid',
     ax.set_xlim(vcen-vwin/2, vcen+vwin/2)
     ax.set_ylim(-2*noise, ymax)
     sp.save(f'{outname}_{lon_pix}_{lat_pix}_{dlon}x{dlat}')
+
+
+##############################################################################
+#                         Individual Plots
+##############################################################################
+
+def plot_corner(group, outname='corner', truths=None):
+    ncomp = group.attrs['ncomp']
+    par_labels = ammonia.TEX_LABELS.copy()
+    par_labels[3] = r'$\log(N) \ [\log(\mathrm{cm^{-2}})]$'
+    n_params = group.attrs['n_params'] // ncomp
+    names = ammonia.get_par_names()
+    post = group['posteriors'][...][:,:-2]  # posterior param values
+    if truths is not None:
+        markers = {
+                p: truths[i*ncomp:(i+1)*ncomp]
+                for i, p in zip(range(n_params), ammonia.get_par_names())
+        }
+    else:
+        markers = None
+    # Give each model component parameter set its own sampler object so that
+    # each can be over-plotted in its own color.
+    samples = [
+            getdist.MCSamples(
+                samples=post[:,ii::ncomp],
+                names=names,
+                labels=par_labels,
+                label=f'Component {ii+1}',
+                name_tag=f'{ii}',
+                sampler='nested')
+            for ii in range(ncomp)
+    ]
+    [s.updateSettings({'contours': [0.68, 0.90]}) for s in samples]
+    fig = gd_plt.get_subplot_plotter()
+    fig.triangle_plot(samples, filled=True,
+            line_args=[
+                {'lw':2, 'color':'tab:orange'},
+                {'lw':2, 'color':'tab:blue'},
+                {'lw':2, 'color':'tab:green'}],
+            markers=markers,
+    )
+    fig.export(f'{outname}.pdf')
+    plt.close('all')
+
+
+def plot_multicomp_velo_2corr(group, outname='velo_2corr', truths=None):
+    ncomp = group.attrs['ncomp']
+    assert ncomp == 2
+    n_params = group.attrs['n_params'] // ncomp
+    post = group['posteriors'][...][:,:-2]  # param values
+    names = ammonia.get_par_names(ncomp)
+    par_labels = [''] * 12
+    par_labels[0] = r'$v_\mathrm{lsr}\, (1) \ [\mathrm{km\,s^{-1}}]$'
+    par_labels[1] = r'$v_\mathrm{lsr}\, (2) \ [\mathrm{km\,s^{-1}}]$'
+    par_labels[8] = r'$\sigma_\mathrm{v}\, (1) \ [\mathrm{km\,s^{-1}}]$'
+    par_labels[9] = r'$\sigma_\mathrm{v}\, (2) \ [\mathrm{km\,s^{-1}}]$'
+    samples = getdist.MCSamples(samples=post, names=names, labels=par_labels,
+            sampler='nested')
+    samples.updateSettings({'contours': [0.68, 0.90]})
+    fig = gd_plt.get_subplot_plotter()
+    x_names = ['v1', 's1']
+    y_names = ['v2', 's2']
+    if truths is not None:
+        xmarkers = {k: truths[k] for k in x_names}
+        ymarkers = {k: truths[k] for k in y_names}
+    else:
+        xmarkers, ymarkers = None, None
+    fig.rectangle_plot(x_names, y_names, roots=samples, filled=True,
+            line_args={'lw': 2, 'color': 'peru'}, xmarkers=xmarkers,
+            ymarkers=ymarkers)
+    fig.export(f'{outname}.pdf')
+    plt.close('all')
+
+
+def plot_info_kernel(sigma_pix, nrad, clip_radius, outname='info_kernel'):
+    k_arr = get_indep_info_kernel(sigma_pix, nrad=nrad)
+    k_arr = apply_circular_mask(k_arr, radius=clip_radius)
+    k_arr = np.log10(k_arr)
+    ppbeam = 2 * np.pi * sigma_pix**2
+    max_info = np.log10(1/ppbeam)
+    hwhm_pix = sigma_pix * np.sqrt(2 * np.log(2))
+    fig, ax = plt.subplots(figsize=(3.05, 2.5))
+    im = ax.imshow(k_arr, vmax=0, cmap=CLR_CMAP)
+    ax.add_patch(patches.Circle((nrad, nrad), hwhm_pix,
+        edgecolor='cyan', facecolor='none'))
+    ax.add_patch(patches.Circle((nrad, nrad), clip_radius,
+        edgecolor='white', facecolor='none', linestyle='dashed'))
+    cb = plt.colorbar(im, pad=0.02)
+    cb.ax.axhline(y=max_info, color='black', linewidth=1)
+    cb.set_label(r'$\log_{10}(\mathrm{Information / pix})$')
+    ax.set_xlabel('Right Ascension (pixels)')
+    ax.set_ylabel('Declination (pixels)')
+    ax.xaxis.set_ticks_position('none')
+    ax.yaxis.set_ticks_position('none')
+    ax.set_xticks([])
+    ax.set_yticks([])
+    plt.tight_layout()
+    save_figure(f'plots/{outname}')
+    plt.close('all')
 
 
 ##############################################################################
