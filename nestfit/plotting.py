@@ -328,7 +328,7 @@ class StorePlotter:
 #                           Store Plotter Plots
 ##############################################################################
 
-def plot_evdiff(sp, outname='evdiff', conv=True):
+def plot_evdiff(sp, outname='evdiff', conv=True, kind='thresh'):
     if conv:
         prefix = 'conv'
         evid = sp.store.hdf['/products/conv_evidence'][...]
@@ -337,16 +337,21 @@ def plot_evdiff(sp, outname='evdiff', conv=True):
         evid = sp.store.hdf['/products/evidence'][...]
     data = evid[1] - evid[0]
     fig, ax = plt.subplots(figsize=sp.get_figsize(), subplot_kw={'projection': sp.wcs})
-    im = ax.imshow(data, vmin=-3, vmax=3, cmap=CLR_CMAP)
-    ax.contourf(data, levels=[3, 11, np.nanmax(data)],
-            colors=['forestgreen', 'limegreen'])
+    if kind == 'thresh':
+        im = ax.imshow(data, vmin=-3, vmax=3, cmap=CLR_CMAP)
+        ax.contourf(data, levels=[3, 11, np.nanmax(data)],
+                colors=['forestgreen', 'limegreen'])
+    elif kind == 'continuous':
+        im = ax.imshow(data, vmin=-3, vmax=30, cmap=HOT_CMAP)
+    else:
+        raise ValueError(f'Invalid kind: "{kind}"')
     cbar = sp.add_colorbar(im)
     cbar.set_label(r'$\log \mathcal{Z}_1 / \mathcal{Z}_0$')
     sp.add_field_mask_contours(ax)
     sp.add_beam(ax)
     sp.set_labels(ax)
     sp.subplots_adjust()
-    sp.save(f'{outname}_{prefix}')
+    sp.save(f'{outname}_{prefix}_{kind}')
 
 
 def plot_mext_evdiff(sp, outname='mext_evdiff', conv=True):

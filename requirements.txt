@@ -1,8 +1,10 @@
 astropy
+cython
 getdist
 h5py
 matplotlib
 numpy
+photutils
 pyspeckit
 scipy
 spectral_cube

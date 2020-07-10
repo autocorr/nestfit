@@ -1032,8 +1032,53 @@ def deblend_hf_intensity(store, stack, runner):
     # transpose to (t, m, b, l)
     store.create_dataset('peak_intensity', pkint.transpose(), group=dpath)
     store.create_dataset('integrated_intensity', intint.transpose(), group=dpath)
-    # transpose to (t, m, S, b, l)
-    store.create_dataset('hf_deblended', hfdb.transpose(), group=dpath)
+    # transpose (l, b, m, t, S) -> (t, m, S, b, l)
+    hfdb = hfdb.transpose((3, 2, 4, 1, 0))
+    store.create_dataset('hf_deblended', hfdb, group=dpath)
+
+
+def create_fits_from_store(store, prefix='source'):
+    """
+    Create FITS files from the datasets in the HDF Store.
+
+    Parameters
+    ----------
+    store : HdfStore
+    """
+    map_header = store.read_header(full=False)
+    cube_header = store.read_header(full=True)
+    hdf = store.hdf
+    dpath = store.dpath
+    # dimensions (p, h)
+    bins = hdf[f'{dpath}/pdf_bins'][...]
+    nbins = bins.shape[1]
+    vaxis = bins[0]  # FIXME NH3 specific
+    ### hyperfine deblended cube
+    # dimensions (t, m, S, b, l)
+    hfdb = hdf[f'{dpath}/hf_deblended'][...]
+    hfdb = hfdb.transpose((1, 2, 0, 3, 4))
+    n_t = hfdb.shape[0]
+    for i_t in range(n_t):
+        # sum axis `m` or model component number
+        data = np.nansum(hfdb[i_t], axis=0)
+        header = cube_header.copy()
+        header.update({
+            'BUNIT': 'K',
+            'NAXIS3': vaxis.size,
+            'CRPIX3': 1,  # fortran 1-based indexing
+            'CDELT3': vaxis[1] - vaxis[0],
+            'CUNIT3': 'km/s',
+            'CTYPE3': 'VRAD',
+            'CRVAL3': vaxis[0],
+            'SPECSYS': 'LSRK',
+        })
+        hdu = fits.PrimaryHDU(data, header)
+        hdu.writeto(f'{prefix}_hf_deblended_trans{i_t}.fits', overwrite=True)
+    # TODO implement:
+    #  - peak intensity
+    #  - integrated intensity
+    #  - PDF local (MAP, median, error)
+    #  - PDF joint
 
 
 def postprocess_run(store, stack, runner, par_bins=None, evid_kernel=None,

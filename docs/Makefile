@@ -44,11 +44,6 @@ html:
 	$(SPHINXBUILD) -b html $(ALLSPHINXOPTS) $(BUILDDIR)/html
 	@echo
 	@echo "Build finished. The HTML pages are in $(BUILDDIR)/html."
-	@echo "******** THIS HAS BEEN ADDED BY AG *******"
-	cp -R _build/html/* ../../pyspeckit.bitbucket.org/html/sphinx/
-	cp -R _build/html/* ../../pyspeckit.bitbucket.org/html/
-	@echo "Copied _build/html/ to ../../pyspeckit.bitbucket.org/html/sphinx/"
-	@echo "Copied _build/html/ to ../../pyspeckit.bitbucket.org/html/"
 
 dirhtml:
 	$(SPHINXBUILD) -b dirhtml $(ALLSPHINXOPTS) $(BUILDDIR)/dirhtml
@@ -112,9 +107,6 @@ latexpdf:
 	@echo "WARNING: Don't forget to ln -s ../../html/images . in the _build directory"
 	make -C $(BUILDDIR)/latex all-pdf
 	@echo "pdflatex finished; the PDF files are in $(BUILDDIR)/latex."
-	@echo "******** THIS HAS BEEN ADDED BY AG *******"
-	cp -R $(BUILDDIR)/latex/pyspeckit.pdf ../html/sphinx/
-	@echo "Copied $(BUILDDIR)/latex/pyspeckit.pdf to ../html/sphinx/"
 
 text:
 	$(SPHINXBUILD) -b text $(ALLSPHINXOPTS) $(BUILDDIR)/text
