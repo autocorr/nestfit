@@ -3,41 +3,26 @@ NestFit
 =======
 Welcome to the NestFit documentation!  NestFit is a Bayesian framework for
 model fitting spectral line data containing single or multiple velocity
-components.  For installation instructions see the :doc:`install` page. To get
-started, see the :doc:`quick-start guide <quickstart>`.
+components. The site index may be found in the sidebar with the
+:doc:`installation instructions <install>` and a :doc:`quick-start guide
+<quickstart>`.
 
 
-Documentation
-=============
+Help and Contributing
+=====================
+If you run into an issue, please report it on the `issue tracker
+<https://github.com/autocorr/nestfit/issues>`_ and I am happy to assist.  If
+you would like general help, please also feel free to contact me at the gmail
+address ``brian.e.svoboda+nestfit``.
 
-.. toctree::
-   :name: mastertoc
-   :maxdepth: 2
-
-   Homepage <self>
-   changelog
-   install
-   overview
-   quickstart
-   Limitations and Issues <limitations>
-   store_spec
+Contributions are also very welcome.  The package is implemented in a mix of Python
+and `Cython <https://cython.org>`_, and is released under the MIT license.  The
+latest development version can be found `here <https://github.com/autocorr/nestfit>`__.
+Feel free to contact me, open an issue for discussion, or create a pull request.
 
 
-Contributing
-============
-Feedback and contributions are very welcome.  The package is implemented in a
-mix of Python and `Cython <https://cython.org>`_, and is released under the MIT
-license.  The latest development version can be found
-`here <https://github.com/autocorr/nestfit>`__.
-
-If you find an issue, please report it on the
-`issue tracker <https://github.com/autocorr/nestfit/issues>`_
-or create a pull request. If you would like assistance, please feel free to
-contact me at the gmail address ``brian.e.svoboda+nestfit``.
-
-
-Citation
-========
+Citing this project
+===================
 If you make use of NestFit in an academic work, please cite the forth-coming
 publication that will be listed here (Svoboda `in prep.`) as well as the
 publications for MultiNest (Feroz & Hobson
@@ -65,4 +50,21 @@ The implementation of the fast exponential function is taken from the LIME
 radiative transfer code developed by Christian Brinch and the LIME development
 team. These modified files (``fastexp.h``, ``fastexp.c``) are licensed under
 the GNU GPL v3.
+
+
+Documentation
+=============
+
+.. toctree::
+   :name: mastertoc
+   :maxdepth: 3
+
+   Homepage <self>
+   changelog
+   Installation <install>
+   overview
+   quickstart
+   Limitations and Issues <limitations>
+   store_spec
+
 
