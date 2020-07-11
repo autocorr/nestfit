@@ -1,19 +1,26 @@
 ========================
 Store-file specification
 ========================
+The model fit data produced by NestFit are organized by pixel
+and model type (i.e., the number of components fit) hierarchically in a
+`HDF5 <https://en.wikipedia.org/wiki/Hierarchical_Data_Format>`__ based store.
+This page documents the internal structure of the data and metadata in the
+store. FITS images and cubes may be produced for a sub-set of data products.
 
-Directory Description
----------------------
-Model fit products are stored in specified way in a hierarchical HDF5 file. A
-store may be opened using an instance of the ``nestfit.HdfStore`` class. Some
-functionality is encapsulated using this class, but most data operations take
-place directly on the primary ``h5py.File`` instance. Please see the ``h5py``
-`documentation <https://h5py.readthedocs.io>`_ for a description of HDF5 files
-and how to use them.
+Store Description
+-----------------
+All data products are stored in a special directory with the extension
+``.store``.  For parallel cube-fitting, multiple HDF5 "chunk" files are placed
+in this directory so that each process may write separately without locking.
+The entries within each chunk are then soft-linked to the primary ``table.hdf``
+file (without copying). For more information on HDF5 soft links, see the
+``h5py`` documentation `here
+<https://h5py.readthedocs.io/en/stable/high/group.html#group-softlinks>`_.  The
+``table.hdf`` file stores the metadata, cube header, and the aggregated
+products created from post-processing.
 
-For parallel cube-fitting, multiple HDF5 files in a special directory are used
-such that each process may write without locking.  The directory for the store
-has the extension ``.store`` and the following structure:
+The directory for the store has the extension ``.store`` and the following
+structure:
 
 .. code-block :: none
 
@@ -23,25 +30,21 @@ has the extension ``.store`` and the following structure:
         - ...
         - table.hdf
 
-where the files ``chunk<N>.hdf`` are the HDF5 files for each process. Once a
-cube has been fit, the entries within each chunk are soft-linked to the
-single file ``table.hdf`` without copying. For more information on HDF5 soft
-links, see the ``h5py`` documentation `here
-<https://h5py.readthedocs.io/en/stable/high/group.html#group-softlinks>`_.
-The ``table.hdf`` file stores the metadata, cube header, and the aggregated
-products created from post-processing.
+where the files ``chunk<N>.hdf`` are the HDF5 files created by each process.
 
 The specification and layout of the data in the ``table.hdf`` is given in the
-following section. The HDF5 file may be accessed directly with the attribute
-``HdfStore.hdf``, which is an instance of ``h5py.File``.  Note that data
-product arrays are strided in the C convention with fastest varying index being
-furthest to the right. They are optimized for displaying maps of a given
-parameter combination.
+following section. The table file may be accessed directly from the attribute
+``nestfit.HdfStore.hdf`` and is an instance of ``h5py.File``.  Please see the
+``h5py`` `documentation <https://h5py.readthedocs.io>`_ for a description of
+HDF5 files and how to use them.
+
+Note that data product arrays are strided in
+the C convention with fastest varying index being furthest to the right. They
+are optimized for displaying maps of a given parameter combination.
 
 
 Specification
 -------------
-
 The data stored in the HDF table file has the following specification. Group
 names are indicated by a ``"*"``, attributes by a ``"-"``, and datasets by a ``"="``
 followed by the dimension. Child items are indicated by indentation. Group and
