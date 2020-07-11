@@ -1,6 +1,10 @@
-=======
-NestFit
-=======
+=====================
+Bayesian Line Fitting
+=====================
+
+.. image:: images/logo.svg
+    :align: center
+
 Welcome to the NestFit documentation!  NestFit is a Bayesian framework for
 model fitting spectral line data containing single or multiple velocity
 components. The site index may be found in the sidebar with the

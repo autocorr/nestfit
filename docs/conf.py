@@ -17,7 +17,7 @@
 
 # -- Project information -----------------------------------------------------
 
-project = 'nestfit'
+project = 'NestFit'
 copyright = '2020, Brian Svoboda'
 author = 'Brian Svoboda'
 
