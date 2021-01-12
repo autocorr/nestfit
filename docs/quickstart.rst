@@ -15,9 +15,9 @@ adapted to other ammonia datasets.
 
 Applying NestFit to a dataset may be broadly broken down into four steps:
 
-1. Read data cubes and noise maps into the `CubeStack` class.
-2. Create the prior probability distributions and initialize the
+1. Create the prior probability distributions and initialize the
    prior transformation class, `PriorTransformer`.
+2. Read data cubes and noise maps into the `CubeStack` class.
 3. Run the Bayesian inference with the `CubeFitter` class! This step
    produces a store file containing the posteriors and evidences per
    pixel per model per component.
