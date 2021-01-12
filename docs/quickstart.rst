@@ -15,14 +15,14 @@ adapted to other ammonia datasets.
 
 Applying NestFit to a dataset may be broadly broken down into four steps:
 
-    1. Read data cubes and noise maps into the `CubeStack` class.
-    2. Create the prior probability distributions and initialize the
-       prior transformation class, `PriorTransformer`.
-    3. Run the Bayesian inference with the `CubeFitter` class! This step
-       produces a store file containing the posteriors and evidences per
-       pixel per model per component.
-    4. Post-process the store to aggregate per-pixel quantities into dense,
-       multi-dimensional data products.
+1. Read data cubes and noise maps into the `CubeStack` class.
+2. Create the prior probability distributions and initialize the
+   prior transformation class, `PriorTransformer`.
+3. Run the Bayesian inference with the `CubeFitter` class! This step
+   produces a store file containing the posteriors and evidences per
+   pixel per model per component.
+4. Post-process the store to aggregate per-pixel quantities into dense,
+   multi-dimensional data products.
 
 First import the relevant modules and classes:
 
@@ -75,6 +75,9 @@ linewidths.
             ConstantPrior(0, 5),
     ])
     utrans = PriorTransformer(priors)
+
+Now read in the datacubes, indexed by the transition ID of the molecule. For
+the ammonia inversion transitions, these correspond to (1,1) and (2,2).
 
 .. code-block:: python
 
