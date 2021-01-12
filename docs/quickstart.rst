@@ -16,9 +16,9 @@ adapted to other ammonia datasets.
 Applying NestFit to a dataset may be broadly broken down into four steps:
 
 1. Create the prior probability distributions and initialize the
-   prior transformation class, `PriorTransformer`.
-2. Read data cubes and noise maps into the `CubeStack` class.
-3. Run the Bayesian inference with the `CubeFitter` class! This step
+   prior transformation class, ``PriorTransformer``.
+2. Read data cubes and noise maps into the ``CubeStack`` class.
+3. Run the Bayesian inference with the ``CubeFitter`` class. This step
    produces a store file containing the posteriors and evidences per
    pixel per model per component.
 4. Post-process the store to aggregate per-pixel quantities into dense,
@@ -42,7 +42,7 @@ inference and should be carefully considered for the problem at hand.
 Distributions are handled numerically and use interpolation when sampling
 values. Thus the user is required to supply "x" and "y" values for the prior
 PDF for each parameter. Note that it is best to avoid large ranges of zeros on
-the lower and upper bounds of the distributions. The `ResolvePlacementPrior`
+the lower and upper bounds of the distributions. The ``ResolvePlacementPrior``
 spaces velocity components apart from other based on the sampled centroids and
 linewidths.
 
@@ -89,15 +89,15 @@ the ammonia inversion transitions, these correspond to (1,1) and (2,2).
 
 With our data and priors properly initialized, we are ready to run NestFit!
 Most of the important run-time parameters are set when initializing the
-`CubeFitter` class. Keyword arguements taken by MultiNest are passed with a
-dictionary from the `mn_kwargs` parameter. In this example the number of live
+``CubeFitter`` class. Keyword arguements taken by MultiNest are passed with a
+dictionary from the ``mn_kwargs`` parameter. In this example the number of live
 points is set to 500. Further live points may be added in the fitting process
 based on the SNR of the data based on a multiplicative factor set with the
-`nlive_snr_fact` parameter. In this example, the number of live points is
-`nlive = 500 + 20 * SNR`. A larger number of live points ensures adequate
+``nlive_snr_fact`` parameter. In this example, the number of live points is
+``nlive = 500 + 20 * SNR``. A larger number of live points ensures adequate
 posterior sampling of faint secondary spectral components in the vicinity of
-bright primary components.  For a parallel run, set `nproc` to the desired
-number of threads. Setting `nproc` equal to 1 will run the cube fitting in
+bright primary components.  For a parallel run, set ``nproc`` to the desired
+number of threads. Setting ``nproc`` equal to 1 will run the cube fitting in
 serial mode, which is desirable for debugging purposes.
 
 .. code-block:: python
