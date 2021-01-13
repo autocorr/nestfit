@@ -1,7 +1,7 @@
 Quick-start guide
 =================
 This page provides a quick-start guide to using and running NestFit on a real
-dataset. The ammonia (NH3) data fit are taken from the GBT KEYSTONE survey
+ammonia dataset. The data files are taken from the GBT KEYSTONE survey
 published by `Keown et al. (2020)
 <https://ui.adsabs.harvard.edu/abs/2019ApJ...884....4K/abstract>`_ and may be
 downloaded from `CADC <https://www.canfar.net>`_, although access requires
