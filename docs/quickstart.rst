@@ -16,10 +16,10 @@ adapted to other ammonia datasets.
 Applying NestFit to a dataset may be broadly broken down into four steps:
 
 1. Create the prior probability distributions and initialize the
-   prior transformation class, ``PriorTransformer``.
-2. Read data cubes and noise maps into the ``CubeStack`` class.
-3. Run the Bayesian inference with the ``CubeFitter`` class. This step
-   produces a store file containing the posteriors and evidences per
+   prior transformation class, :class:`nestfit.core.core.PriorTransformer`.
+2. Read data cubes and noise maps into the :class:`nestfit.main.CubeStack` class.
+3. Run the Bayesian inference with the :class:`nestfit.main.CubeFitter` class.
+   This step produces a store file containing the posteriors and evidences per
    pixel per model per component.
 4. Post-process the store to aggregate per-pixel quantities into dense,
    multi-dimensional data products.
@@ -42,9 +42,9 @@ inference and should be carefully considered for the problem at hand.
 Distributions are handled numerically and use interpolation when sampling
 values. Thus the user is required to supply "x" and "y" values for the prior
 PDF for each parameter. Note that it is best to avoid large ranges of zeros on
-the lower and upper bounds of the distributions. The ``ResolvePlacementPrior``
-spaces velocity components apart from other based on the sampled centroids and
-linewidths.
+the lower and upper bounds of the distributions. The
+:class:`nestfit.core.core.ResolvedPlacementPrior` spaces velocity components
+apart from other based on the sampled centroids and linewidths.
 
 .. code-block:: python
 

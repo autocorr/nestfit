@@ -8,9 +8,9 @@ Bayesian Line Fitting
 
 Welcome to the NestFit documentation!  NestFit is a Bayesian framework for
 model fitting spectral line data containing single or multiple velocity
-components. The site index may be found in the sidebar with the
-:doc:`installation instructions <install>` and a :doc:`quick-start guide
-<quickstart>`.
+components. The site index is located in the sidebar on the left where
+:doc:`installation instructions <install>`, a :doc:`quick-start guide
+<quickstart>`, and the :doc:`API documentation <nestfit>` are provided.
 
 
 Help and Contributing
@@ -72,4 +72,16 @@ Documentation
    Limitations and Issues <limitations>
    store_spec
 
+.. toctree::
+   :maxdepth: 3
+   :caption: API Documentation
 
+   nestfit
+
+
+Index and Tables
+----------------
+
+* :ref:`genindex`
+* :ref:`modindex`
+* :ref:`search`

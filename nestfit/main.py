@@ -347,7 +347,9 @@ class CubeFitter:
         nlive_snr_fact : number, default 5
             Multiplicative factor to increase the number of live points used in
             fitting each pixel by:
+
                 nlive + int(nlive_snr_fact * snr)
+
             where `nlive` is the value set in `mn_kwargs` arguement.
         """
         self.stack = stack
@@ -579,6 +581,7 @@ def aggregate_run_attributes(store):
     """
     Aggregate the attribute values into a dense array from the individual
     per-pixel Nested Sampling runs. Products include:
+
         * 'nbest' (b, l)
         * 'evidence' (m, b, l)
         * 'evidence_err' (m, b, l)
@@ -638,6 +641,7 @@ def convolve_evidence(store, kernel):
     """
     Convolve the evidence maps and re-select the preferred number of model
     components. Products include:
+
         * 'conv_evidence' (m, b, l)
         * 'conv_nbest' (b, l)
 
@@ -690,6 +694,7 @@ def extended_masked_evidence(store, kernel, conv=True, lnz_thresh=3):
     """
     Mask the local or convolved evidence maps on a threshold for a second
     convolution to identify weak spatially extended features. Products include:
+
         * 'mext_evidence_diff' (b, l)
 
     Parameters
@@ -731,6 +736,7 @@ def aggregate_run_products(store):
     """
     Aggregate the results from the individual per-pixel Nested Sampling runs
     into dense arrays of the product values. Products include:
+
         * 'marg_quantiles' (M)
         * 'nbest_MAP' (m, p, b, l) -- cube of maximum a posteriori values
         * 'nbest_bestfit' (m, p, b, l) -- cube of maximum likelihood values
@@ -797,6 +803,7 @@ def aggregate_run_pdfs(store, par_bins=None):
     Aggregate the results from the individual per-pixel set of posterior
     samples into one-dimensional marginalized PDFs of the parameter posteriors.
     Products include:
+
         * 'pdf_bins' (p, h)
         * 'post_pdfs' (r, m, p, h, b, l)
 
@@ -866,6 +873,7 @@ def aggregate_run_pdfs(store, par_bins=None):
 def convolve_post_pdfs(store, kernel, evid_weight=True):
     """
     Spatially convolve the model posterior PDF. Products include:
+
         * 'conv_post_pdfs' (r, m, p, h, b, l)
 
     Parameters
@@ -929,6 +937,7 @@ def quantize_conv_marginals(store):
     """
     Calculate weighted quantiles of convolved posterior marginal distributions.
     Products include:
+
         * 'conv_marginals' (r, m, p, M, b, l)
 
     Parameters
@@ -974,6 +983,7 @@ def deblend_hf_intensity(store, stack, runner):
     parameter values. Also produce spectral cubes that have had the hyperfine
     splitting deblended.
     Products include:
+
         * 'peak_intensity' (t, m, b, l)
         * 'integrated_intensity' (t, m, b, l)
         * 'hf_deblended' (t, m, S, b, l)
@@ -1141,6 +1151,7 @@ def profile_nested(ncomp=2):
     """
     Profile the various components using the line profiler. Run using the
     IPython magic `lprun`:
+
         %lprun -f main.profile_nested main.profile_nested()
     """
     synspec = get_test_spectra()

@@ -333,7 +333,7 @@ cdef class ResolvedCenSepPrior(Prior):
             Velocity component separation prior
         sigm_prior : Prior
             Velocity dispersion prior
-        sep_scale : number, default 1.5
+        scale : number, default 1.5
             Multiplicative scaling factor of the Gaussian FWHM to provide the
             minimum separation between components.
         """
