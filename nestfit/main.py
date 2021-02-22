@@ -1043,7 +1043,7 @@ def deblend_hf_intensity(store, stack, runner):
     store.create_dataset('peak_intensity', pkint.transpose(), group=dpath)
     store.create_dataset('integrated_intensity', intint.transpose(), group=dpath)
     # transpose (l, b, m, t, S) -> (t, m, S, b, l)
-    hfdb = hfdb.transpose((3, 2, 4, 1, 0))
+    hfdb = hfdb.transpose((4, 3, 1, 0, 2))
     store.create_dataset('hf_deblended', hfdb, group=dpath)
 
 
@@ -1129,7 +1129,7 @@ def postprocess_run(store, stack, runner, par_bins=None, evid_kernel=None,
 #                                 Tests
 ##############################################################################
 
-def test_nested(ncomp=2, prefix='test'):
+def test_nested(ncomp=2, prefix='test', nlive=100, tol=1.0):
     synspec = get_test_spectra()
     spectra = np.array([syn.to_ammspec() for syn in synspec])
     amm1 = spectra[0]
@@ -1142,7 +1142,7 @@ def test_nested(ncomp=2, prefix='test'):
         group = hdf.require_group(f'{prefix}/{ncomp}')
         dumper = Dumper(group)
         runner = AmmoniaRunner(spectra, utrans, ncomp)
-        run_multinest(runner, dumper, nlive=100, seed=5, tol=1.0, efr=0.3,
+        run_multinest(runner, dumper, nlive=nlive, seed=5, tol=tol, efr=0.3,
                 updInt=2000)
     return synspec, spectra, runner
 
