@@ -463,17 +463,20 @@ def take_by_components(data, comps, axis=0, incl_zero=True):
         Include null model when taking components
     """
     take = comps.copy()
-    if incl_zero:
-        take[take == -1] = 0
-    else:
-        take[take == -1] = 1
-        take[take ==  0] = 1
-        take -= 1  # number of comp to array index
-    new_axes = list(range(data.ndim - comps.ndim))
+    # convert number of components to array index
+    #   PDF indices for 0 -> 1 comp; 1 -> 2 comp; etc.
+    take -= 1
+    take[take < 0] = 0
+    new_axes = list(range(data.ndim - take.ndim))
     take = np.expand_dims(take, axis=new_axes)
     data = np.take_along_axis(data, take, axis=axis)
     data = np.squeeze(data, axis=axis)
-    mask = comps < 1
+    if incl_zero:
+        # only exclude -1 for no-data
+        mask = comps < 0
+    else:
+        # exclude both -1 for no-data and 0 for noise only
+        mask = comps < 1
     data[...,mask] = np.nan
     return data
 
