@@ -7,6 +7,6 @@ cdef void c_hf_predict(HyperfineSpectrum s, double voff, double tex, double tau_
                 double sigm) nogil
 
 
-cdef inline double c_iemtex_interp(double x) nogil
+cdef double c_iemtex_interp(double x) nogil
 
 

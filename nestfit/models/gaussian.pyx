@@ -4,30 +4,10 @@
 #cython: cdivision=True
 #cython: initializedcheck=False
 
-cimport cython
+include "model_includes.pxi"
+include "array_sizes.pxi"
 
-import numpy as np
-cimport numpy as np
-np.import_array()
-
-from nestfit.core.math cimport (c_sqrt, c_floor,
-        fast_expn, calcExpTableEntries, fillErfTable)
 from nestfit.core.core cimport (Spectrum, Runner)
-
-
-# Initialize interpolation table entries for `fast_expn`
-calcExpTableEntries(3, 8)
-fillErfTable()
-
-
-# Speed of light
-DEF CKMS = 299792.458      # km/s
-
-
-# TODO
-# do we need a specific gaussian spectrum? or just use base?
-# functionality for fitting multiple lines at different frequencies with the
-# same width and centroid velocity
 
 
 cdef void c_gauss_predict(Spectrum s, double *params, int ndim) nogil:
@@ -48,7 +28,8 @@ cdef void c_gauss_predict(Spectrum s, double *params, int ndim) nogil:
         nu_cen   = s.rest_freq * (1 - voff / CKMS)
         nu_denom = 0.5 / (nu_width * nu_width)
         # Gaussians are approximated by only computing them within the range
-        # of `exp(-12.5)` (3.7e-6) away from the HF line center center.
+        # of `exp(-12.5)` (3.7e-6) away from the line center.
+        #   Eq:  exp(-nu**2 * hf_idenom) = exp(-12.5)
         nu_cutoff = c_sqrt(12.5 / nu_denom)
         nu_lo = (nu_cen - s.nu_min - nu_cutoff)
         nu_hi = (nu_cen - s.nu_min + nu_cutoff)
@@ -70,6 +51,60 @@ def gauss_predict(Spectrum s, double[::1] params):
 
 
 cdef class GaussianRunner(Runner):
-    pass
+    cdef Spectrum spectrum
+
+    def __init__(self, spectrum, utrans, ncomp=1):
+        """
+        Parameters
+        ----------
+        spectrum : Spectrum
+            Spectrum wrapper object
+        utrans : `PriorTransformer`
+            Prior transformer class that samples the prior from the unit cube
+            for the three model parameters.
+        ncomp : int, default 1
+            Number of velocity components.
+
+        Attributes
+        ----------
+        null_lnZ : number
+            Natural log evidence for the "null model" of a constant equal to
+            zero.
+        run_lnZ : number
+            Natural log global evidence from the MultiNest run.
+        """
+        assert ncomp > 0
+        self.n_model = 4
+        self.spectrum = spectrum
+        self.utrans = utrans
+        self.ncomp = ncomp
+        self.n_spec = 1
+        self.n_params = self.n_model * ncomp
+        self.ndim = self.n_params  # no nuisance parameters
+        self.null_lnZ = 0.0
+        self.n_chan_tot = 0
+        self.null_lnZ = spectrum.null_lnZ
+        self.n_chan_tot += spectrum.size
+        self.run_lnZ = np.nan
+
+    @classmethod
+    def from_data(cls, spec_data, utrans, **kwargs):
+        return cls(Spectrum(*spec_data), utrans, **kwargs)
+
+    cdef void c_loglikelihood(self, double *utheta, double *lnL):
+        lnL[0] = 0.0
+        self.utrans.c_transform(utheta, self.ncomp)
+        c_gauss_predict(self.spectrum, utheta, self.ndim)
+        lnL[0] += self.spectrum.c_loglikelihood()
+
+    def get_spectrum(self):
+        return np.array(self.spectrum)
+
+    def predict(self, double[::1] params):
+        if params.shape[0] != self.ndim:
+            ncomp = self.ncomp
+            shape = params.shape[0]
+            raise ValueError(f'Invalid shape for ncomp={ncomp}: {shape}')
+        c_gauss_predict(self.spectrum, &params[0], self.ndim)
 
 

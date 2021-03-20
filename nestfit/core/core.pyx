@@ -560,9 +560,6 @@ cdef class Runner:
         self.c_loglikelihood(&utheta[0], &lnL)
         return lnL
 
-    def get_spectra(self):
-        return np.array(self.spectra)
-
 
 cdef class Dumper:
     cdef:

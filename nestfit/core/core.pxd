@@ -64,7 +64,7 @@ cdef class Runner:
     cdef:
         PriorTransformer utrans
     cdef readonly:
-        long n_model, ncomp, n_params, ndim, n_chan_tot
+        long n_model, ncomp, n_params, ndim, n_chan_tot, n_spec
         double null_lnZ
     cdef public:
         double run_lnZ

@@ -23,6 +23,7 @@ MNEST_DIR = Path(MNEST_DIR).expanduser()
 MOD_NAMES = [
         'nestfit.core.core',
         'nestfit.models.ammonia',
+        'nestfit.models.diazenylium',
         'nestfit.models.gaussian',
         'nestfit.models.hyperfine',
 ]
