@@ -488,18 +488,19 @@ def test_partition_level():
         # with pyspeckit using older constants. For the tests to correctly pass
         # the module must be compiled with `__NEW_CONST=False`
         return
-    # Values computed from `Zpara` and `Zortho` values in
-    #   pyspeckit.spectrum.models.ammonia.ammonia_model
-    tol = -7.0
-    zlev1 = c_partition_level(1, 10.0)  # J=1, Trot=10.0
-    zlev1_psk = 0.29279893434489096
-    np.testing.assert_almost_equal(zlev1, zlev1_psk, decimal=7)
-    zlev2 = c_partition_level(2, 10.0)  # J=2, Trot=10.0
-    zlev2_psk = 0.007933862262432792
-    np.testing.assert_almost_equal(zlev2, zlev2_psk, decimal=7)
-    qpara = c_partition_func(True, 10.0)
-    qpara_psk = 0.30073281405688107
-    np.testing.assert_almost_equal(qpara, qpara_psk, decimal=7)
+    ELSE:
+        # Values computed from `Zpara` and `Zortho` values in
+        #   pyspeckit.spectrum.models.ammonia.ammonia_model
+        tol = -7.0
+        zlev1 = c_partition_level(1, 10.0)  # J=1, Trot=10.0
+        zlev1_psk = 0.29279893434489096
+        np.testing.assert_almost_equal(zlev1, zlev1_psk, decimal=7)
+        zlev2 = c_partition_level(2, 10.0)  # J=2, Trot=10.0
+        zlev2_psk = 0.007933862262432792
+        np.testing.assert_almost_equal(zlev2, zlev2_psk, decimal=7)
+        qpara = c_partition_func(True, 10.0)
+        qpara_psk = 0.30073281405688107
+        np.testing.assert_almost_equal(qpara, qpara_psk, decimal=7)
 
 
 def test_swift_convert():
