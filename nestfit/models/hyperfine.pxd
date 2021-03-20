@@ -3,7 +3,7 @@
 from nestfit.core.core cimport HyperfineSpectrum
 
 
-cdef void c_hf_predict(HyperfineSpectrum s, double voff, double tex, double tau_main,
+cdef void c_hf_predict(HyperfineSpectrum s, double voff, double tex, double ltau_main,
                 double sigm) nogil
 
 

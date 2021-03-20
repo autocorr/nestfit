@@ -48,4 +48,16 @@ from nestfit.models.ammonia import (
         AmmoniaRunner,
 )
 
+from nestfit.models.diazenylium import (
+        nnhp_predict,
+        DiazenyliumSpectrum,
+        DiazenyliumRunner,
+)
+
+from nestfit.models.gaussian import (
+        gauss_predict,
+        GaussianSpectrum,
+        GaussianRunner,
+)
+
 

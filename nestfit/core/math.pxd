@@ -8,6 +8,7 @@ cdef extern from 'math.h' nogil:
     double c_exp 'exp' (double)
     double c_expm1 'expm1' (double)
     double c_log 'log' (double)
+    double c_log10 'log10' (double)
     double c_sqrt 'sqrt' (double)
     double c_floor 'floor' (double)
 

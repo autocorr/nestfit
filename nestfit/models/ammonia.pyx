@@ -389,7 +389,7 @@ cdef void c_amm_predict(AmmoniaSpectrum s, double *params, long ndim,
         fracterm = CCMS**2 * t.ea / (8 * M_PI * t.nu**2)
         widthterm = CKMS / (sigm * t.nu * c_sqrt(2 * M_PI))
         tau_main = pop_rotstate * fracterm * expterm * widthterm
-        c_hf_predict(s, voff, tex, tau_main, sigm)
+        c_hf_predict(s, voff, tex, c_log10(tau_main), sigm)
 
 
 def amm_predict(AmmoniaSpectrum s, double[::1] params, bint cold=False,

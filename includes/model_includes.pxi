@@ -5,7 +5,7 @@ cimport numpy as np
 np.import_array()
 
 from nestfit.core.math cimport (M_PI, c_exp, c_expm1, c_sqrt, c_floor,
-        c_log, fast_expn, calcExpTableEntries, fillErfTable)
+        c_log, c_log10, fast_expn, calcExpTableEntries, fillErfTable)
 
 
 # Initialize interpolation table entries for `fast_expn`

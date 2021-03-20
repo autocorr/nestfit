@@ -49,16 +49,18 @@ def iemtex_interp(x):
     return c_iemtex_interp(x)
 
 
-cdef void c_hf_predict(HyperfineSpectrum s, double voff, double tex, double tau_main,
+cdef void c_hf_predict(HyperfineSpectrum s, double voff, double tex, double ltau_main,
             double sigm) nogil:
     """See docstring for ``hf_predict``."""
     cdef:
         long i, j
         long nu_lo_ix, nu_hi_ix
+        double tau_main
         double hf_freq, hf_width, hf_offset, nu, T0, hf_tau_sum, tau_exp
         double hf_tau, hf_nucen, hf_idenom
         double nu_cutoff, nu_lo, nu_hi
         Transition t = s.trans
+    tau_main = 10.0**ltau_main
     # Calculate the velocity/frequency related constants for the hyperfine
     # transitions.
     for i in range(s.size):
@@ -116,7 +118,7 @@ cdef void c_hf_predict(HyperfineSpectrum s, double voff, double tex, double tau_
             )
 
 
-def hf_predict(HyperfineSpectrum s, voff, tex, tau_main, sigm):
+def hf_predict(HyperfineSpectrum s, voff, tex, ltau_main, sigm):
     """
     Predict the spectral profile for a line given the excitation temperature
     and main-line optical depth. The function results in a mutation of the
@@ -130,12 +132,12 @@ def hf_predict(HyperfineSpectrum s, voff, tex, tau_main, sigm):
         Line velocity offset
     tex : number
         Line excitation temperature
-    tau_main : number
-        Line optical depth
+    ltau_main : number
+        Log base-10 of the main line optical depth
     sigm : number
         Line velocity dispersion
     """
-    c_hf_predict(s, voff, tex, tau_main, sigm)
+    c_hf_predict(s, voff, tex, ltau_main, sigm)
 
 
 ##############################################################################

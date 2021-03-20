@@ -100,21 +100,21 @@ for i in range(N_LEVELS):
     TRANS[i].tau_wts = TAU_WTS[i]
 
 
-PAR_NAMES = ['voff', 'tex', 'tau', 'sigm']
+PAR_NAMES = ['voff', 'tex', 'ltau', 'sigm']
 
-PAR_VARIABLES_ASCII = ['v', 'Tx', 't', 's']
+PAR_VARIABLES_ASCII = ['v', 'Tx', 'lt', 's']
 
 TEX_LABELS = [
         r'$v_\mathrm{lsr} \ [\mathrm{km\, s^{-1}}]$',
         r'$T_\mathrm{ex} \ [\mathrm{K}]$',
-        r'$\tau_0$',
+        r'$\log(\tau_0)$',
         r'$\sigma_\mathrm{v} \ [\mathrm{km\, s^{-1}}]$',
 ]
 
 TEX_LABELS_NU = [  # without units
         r'$v_\mathrm{lsr}$',
         r'$T_\mathrm{ex}$',
-        r'$\tau_0$',
+        r'$\log(\tau_0)$',
         r'$\sigma_\mathrm{v}$',
 ]
 
@@ -170,16 +170,16 @@ cdef void c_nnhp_predict(DiazenyliumSpectrum s, double *params,
     cdef:
         long i
         long ncomp = ndim // 4
-        double voff, tex, tau, sigm
+        double voff, tex, ltau, sigm
         Transition t = s.trans
     for i in range(s.size):
         s.pred[i] = 0.0
     for i in range(ncomp):
         voff = params[        i]
         tex  = params[1*ncomp+i]
-        tau  = params[2*ncomp+i]
+        ltau = params[2*ncomp+i]
         sigm = params[3*ncomp+i]
-        c_hf_predict(s, voff, tex, tau, sigm)
+        c_hf_predict(s, voff, tex, ltau, sigm)
 
 
 def nnhp_predict(DiazenyliumSpectrum s, double[::1] params):
