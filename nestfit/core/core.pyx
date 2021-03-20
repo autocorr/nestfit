@@ -545,6 +545,11 @@ cdef class Spectrum:
         return np.array(self.pred)
 
 
+cdef class HyperfineSpectrum(Spectrum):
+    # Extension type declaration in `.pxd`
+    pass
+
+
 cdef class Runner:
     # Extension type declaration in `.pxd`
     cdef void c_loglikelihood(self, double *utheta, double *lnL):

@@ -1,5 +1,17 @@
 #cython: language_level=3
 
+include "array_sizes.pxi"
+
+
+cdef struct Transition:
+    long n                    # Transition ID number (0 indexed)
+    bint para                 # Is a para-transition?
+    double nu                 # Rest frequency
+    double ea                 # Einstein A coefficient
+    long nhf                  # Number of hyperfine transitions
+    double[MAX_HF_N] voff     # Velocity offsets of hyperfines
+    double[MAX_HF_N] tau_wts  # Optical depth weights
+
 
 cdef class Distribution:
     cdef:
@@ -40,6 +52,12 @@ cdef class Spectrum:
         double[::1] xarr, data, pred, tarr
 
     cdef double c_loglikelihood(self)
+
+
+cdef class HyperfineSpectrum(Spectrum):
+    cdef:
+        double[::1] tbg_arr
+        Transition trans
 
 
 cdef class Runner:

@@ -1,0 +1,12 @@
+#cython: language_level=3
+
+from nestfit.core.core cimport HyperfineSpectrum
+
+
+cdef void c_hf_predict(HyperfineSpectrum s, double voff, double tex, double tau_main,
+                double sigm) nogil
+
+
+cdef inline double c_iemtex_interp(double x) nogil
+
+

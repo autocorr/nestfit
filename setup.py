@@ -24,6 +24,7 @@ MOD_NAMES = [
         'nestfit.core.core',
         'nestfit.models.ammonia',
         'nestfit.models.gaussian',
+        'nestfit.models.hyperfine',
 ]
 
 
@@ -42,7 +43,7 @@ def init_ext(mod_name):
             [f'{file_path}.pyx', 'nestfit/core/fastexp.c'],
             libraries=['m', 'multinest'],
             include_dirs=[np.get_include(), str(MNEST_DIR/'include'),
-                'nestfit/core'],
+                'nestfit/core', 'includes'],
             library_dirs=[str(MNEST_DIR/'lib')],
             extra_compile_args=['-O3', '-march=native', '-mtune=native',
                 '-ffast-math', '-fopenmp'],

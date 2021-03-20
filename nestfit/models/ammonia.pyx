@@ -4,43 +4,12 @@
 #cython: cdivision=True
 #cython: initializedcheck=False
 
-cimport cython
+include "model_includes.pxi"
+include "array_sizes.pxi"
 
-import numpy as np
-cimport numpy as np
-np.import_array()
+from nestfit.core.core cimport (Transition, HyperfineSpectrum, Runner)
+from nestfit.models.hyperfine cimport c_hf_predict
 
-from nestfit.core.math cimport (M_PI, c_exp, c_expm1, c_sqrt, c_floor,
-        c_log, fast_expn, calcExpTableEntries, fillErfTable)
-from nestfit.core.core cimport (Spectrum, Runner)
-
-
-# Initialize interpolation table entries for `fast_expn`
-calcExpTableEntries(3, 8)
-fillErfTable()
-
-# Constants for conditional compilation.
-# Use approximation methods versus exact terms. This applies to using:
-#   * `fast_expn(x)` function in-place of `c_exp(-x)`
-#   * calculation of the gaussian profiles over a limited neighborhood
-#   * linear interpolation of the Tex-term in the brightness temperature axis
-DEF __APPROX = True
-# Use updated physical and spectroscopic constants.
-DEF __NEW_CONST = True
-# Execute code pathes for debugging
-DEF __DEBUG = False
-
-# Speed of light
-DEF CKMS = 299792.458      # km/s
-DEF CCMS = 29979245800.0   # cm/s
-
-# Other physical constants in CGS; from `astropy.constants`
-DEF H    = 6.62607015e-27  # erg s, Planck's constant
-DEF KB   = 1.380649e-16    # erg/K, Boltzmann's constant
-IF __NEW_CONST:
-    DEF TCMB = 2.72548     # K, T(CMB); Fixsen (2009) ApJ 707 916F
-ELSE:
-    DEF TCMB = 2.7315      # K, T(CMB); from pyspeckit
 
 # Ammonia rotation constants [Splat ID: 01709]
 IF __NEW_CONST:
@@ -56,8 +25,6 @@ ELSE:
 DEF NPART = 51
 DEF NPARA = 34  # out of 51
 DEF NORTH = 17  # out of 51
-# Maximum number of hyperfine transitions for fixed length arrays
-DEF MAX_HF_N = 50
 # Number of rotational levels: (1,1) thru (9,9)
 DEF N_LEVELS = 9
 
@@ -258,16 +225,6 @@ TAU_WTS[8][:NHF[8]] = [  # (9,9)
 ]
 
 
-cdef struct Transition:
-    long n
-    bint para
-    double nu
-    double ea
-    long nhf
-    double[MAX_HF_N] voff
-    double[MAX_HF_N] tau_wts
-
-
 # Fill global transition struct array
 cdef:
     Transition[N_LEVELS] TRANS
@@ -281,9 +238,9 @@ for i in range(N_LEVELS):
     TRANS[i].tau_wts = TAU_WTS[i]
 
 
-PAR_NAMES = [
-        'voff', 'trot', 'tex', 'ntot', 'sigm', 'orth',
-]
+PAR_NAMES = ['voff', 'trot', 'tex', 'ntot', 'sigm', 'orth']
+
+PAR_VARIABLES_ASCII = ['v', 'Tk', 'Tx', 'N', 's', 'o']
 
 TEX_LABELS = [
         r'$v_\mathrm{lsr} \ [\mathrm{km\, s^{-1}}]$',
@@ -308,18 +265,14 @@ def get_par_names(ncomp=None):
     if ncomp is not None:
         return [
                 f'{label}{n}'
-                for label in ('v', 'Tk', 'Tx', 'N', 's', 'o')
+                for label in PAR_VARIABLES_ASCII
                 for n in range(1, ncomp+1)
         ]
     else:
-        return ['v', 'Tk', 'Tx', 'N', 's', 'o']
+        return PAR_VARIABLES_ASCII
 
 
-cdef class AmmoniaSpectrum(Spectrum):
-    cdef:
-        double[::1] tbg_arr
-        Transition trans
-
+cdef class AmmoniaSpectrum(HyperfineSpectrum):
     def __init__(self, xarr, data, noise, trans_id=1):
         """
         Parameters
@@ -334,7 +287,7 @@ cdef class AmmoniaSpectrum(Spectrum):
             The brightness temperature baseline RMS noise level.
             **units**: K
         trans_id : int
-            para-NH3 meta-stable transition ID
+            NH3 meta-stable transition ID.
                 1 -> (1,1)
                 2 -> (2,2)
                 ...
@@ -399,58 +352,14 @@ def partition_func(para, trot):
     return c_partition_func(para, trot)
 
 
-DEF T0_LO = H * 23.0e9 / KB  # Frequency in Hz
-DEF T0_HI = H * 28.0e9 / KB
-DEF T0_XMIN = T0_LO / 8.0    # Upper Tex = 8.0 K
-DEF T0_XMAX = T0_HI / 2.7    # Lower Tex = 2.7 K
-DEF T0_SIZE = 1000
-cdef:
-    double[::1] T0_X = np.linspace(T0_XMIN, T0_XMAX, T0_SIZE)
-    double[::1] T0_Y = 1.0 / (np.exp(T0_X) - 1.0)
-    double T0_INV_DX = 1.0 / (T0_X[1] - T0_X[0])
-
-
-cdef inline double c_iemtex_interp(double x) nogil:
-    """
-    Use a linear interpolation to approximate the function:
-        f(x) = 1 / (exp(x) - 1)
-    over the domain in `x` from (0.138, 0.498). This corresponds to frequency
-    values between 23-28 GHz and excitation temperatures between 2.7-8.0 K.
-    Outside of this interval, use the exact solution. Using a linear
-    interpolation with N=1000 results in a relative numerical precision of
-    ~1.8e-6 (|f'-f|/f) and a ~1.3x speed increase.
-    """
-    cdef:
-        long i_lo, i_hi
-        double x_lo, y_lo, y_hi, slope
-    if T0_XMIN < x < T0_XMAX:
-        i_lo = <long>((x - T0_XMIN) * T0_INV_DX)
-        i_hi = i_lo + 1
-        x_lo = T0_X[i_lo]
-        y_lo = T0_Y[i_lo]
-        y_hi = T0_Y[i_hi]
-        slope = (y_hi - y_lo) * T0_INV_DX
-        return slope * (x - x_lo) + y_lo
-    else:
-        return 1.0 / c_expm1(x)
-
-
-def iemtex_interp(x):
-    return c_iemtex_interp(x)
-
-
 cdef void c_amm_predict(AmmoniaSpectrum s, double *params, long ndim,
             bint cold, bint lte) nogil:
     cdef:
-        long i, j, k
+        long i
         long ncomp = ndim // 6
-        long nu_lo_ix, nu_hi_ix
         double trot, tex, ntot, sigm, voff, orth
         double zlev, qtot, species_frac, pop_rotstate
         double expterm, fracterm, widthterm, tau_main
-        double hf_freq, hf_width, hf_offset, nu, T0, hf_tau_sum, tau_exp
-        double hf_tau, hf_nucen, hf_idenom
-        double nu_cutoff, nu_lo, nu_hi
         Transition t = s.trans
     for i in range(s.size):
         s.pred[i] = 0.0
@@ -478,61 +387,7 @@ cdef void c_amm_predict(AmmoniaSpectrum s, double *params, long ndim,
         fracterm = CCMS**2 * t.ea / (8 * M_PI * t.nu**2)
         widthterm = CKMS / (sigm * t.nu * c_sqrt(2 * M_PI))
         tau_main = pop_rotstate * fracterm * expterm * widthterm
-        # Calculate the velocity/frequency related constants for the
-        # hyperfine transitions.
-        for j in range(s.size):
-            s.tarr[j] = 0.0
-        for j in range(t.nhf):
-            # Hyperfine (HF) dependent values
-            hf_freq   = (1.0 - t.voff[j] / CKMS) * t.nu
-            hf_width  = sigm / CKMS * hf_freq
-            hf_offset = voff / CKMS * hf_freq
-            hf_nucen  = hf_freq - hf_offset
-            hf_tau    = tau_main * t.tau_wts[j]
-            hf_idenom = 0.5 / (hf_width * hf_width)
-            IF __APPROX:
-                # For each HF line, sum the optical depth in each channel. The
-                # Gaussians are approximated by only computing them within the
-                # range of `exp(-12.5)` (5-sigma, 3.7e-6) away from the HF line
-                # center.
-                #   Eq:  exp(-nu**2 * hf_idenom) = exp(-12.5)
-                nu_cutoff = c_sqrt(12.5 / hf_idenom)
-                nu_lo = (hf_nucen - s.nu_min - nu_cutoff)
-                nu_hi = (hf_nucen - s.nu_min + nu_cutoff)
-                # Get the lower and upper indices then check bounds
-                nu_lo_ix = <long>c_floor(nu_lo/s.nu_chan)
-                nu_hi_ix = <long>c_floor(nu_hi/s.nu_chan)
-                if nu_hi_ix < 0 or nu_lo_ix > s.size-1:
-                    continue
-                nu_lo_ix = 0 if nu_lo_ix < 0 else nu_lo_ix
-                nu_hi_ix = s.size-1 if nu_hi_ix > s.size-1 else nu_hi_ix
-                # Calculate the Gaussian tau profile over the interval
-                for k in range(nu_lo_ix, nu_hi_ix):
-                    nu = s.xarr[k] - hf_nucen
-                    tau_exp = nu * nu * hf_idenom
-                    s.tarr[k] += hf_tau * fast_expn(tau_exp)
-            ELSE:
-                for k in range(s.size):
-                    nu = s.xarr[k] - hf_nucen
-                    tau_exp = nu * nu * hf_idenom
-                    s.tarr[k] += hf_tau * c_exp(-tau_exp)
-        # Compute the brightness temperature
-        for j in range(s.size):
-            if s.tarr[j] == 0.0:
-                continue
-            T0 = H * s.xarr[j] / KB
-            # Eq: (T0 / (exp(T0 / tex) - 1) - T0 / (exp(T0 / TCMB) - 1))
-            #     * (1 - exp(-tau))
-            IF __APPROX:
-                s.pred[j] += (
-                    T0 * (c_iemtex_interp(T0 / tex) - s.tbg_arr[j])
-                    * (1.0 - fast_expn(s.tarr[j]))
-                )
-            ELSE:
-                s.pred[j] += (
-                    (T0 / c_expm1(T0 / tex) - T0 * s.tbg_arr[j])
-                    * (1.0 - c_exp(-s.tarr[j]))
-                )
+        c_hf_predict(s, voff, tex, tau_main, sigm)
 
 
 def amm_predict(AmmoniaSpectrum s, double[::1] params, bint cold=False,
@@ -648,14 +503,6 @@ def test_swift_convert():
     trot = swift_convert(tkin)
     trot_psk = 14.023487575888257
     np.testing.assert_almost_equal(trot, trot_psk, decimal=8)
-
-
-def test_iemtex_interp():
-    fine_x = np.linspace(T0_XMIN, T0_XMAX, 100000)
-    def f(x): return 1 / (np.exp(x) - 1)
-    def diff(x): return np.abs((iemtex_interp(x) - f(x)) / f(x))
-    diffs = np.array([diff(x) for x in fine_x])
-    np.testing.assert_almost_equal(diffs.max(), 0, decimal=5)
 
 
 def test_profile_predict(AmmoniaSpectrum s, double[::1] params,
