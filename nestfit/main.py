@@ -107,7 +107,12 @@ class DataCube:
                 'RADESYS',
                 'EQUINOX',
         )
-        hdict = {k: self._header[k] for k in keys}
+        hdict = {}
+        for k in keys:
+            try:
+                hdict[k] = self._header[k]
+            except KeyError:
+                continue
         hdict['NAXIS'] = 2
         hdict['WCSAXES'] = 2
         coord_sys = ('ra', 'dec', 'lon', 'lat')

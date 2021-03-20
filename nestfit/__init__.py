@@ -56,7 +56,6 @@ from nestfit.models.diazenylium import (
 
 from nestfit.models.gaussian import (
         gauss_predict,
-        GaussianSpectrum,
         GaussianRunner,
 )
 
