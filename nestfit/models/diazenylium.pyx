@@ -13,6 +13,8 @@ from nestfit.models.hyperfine cimport c_hf_predict
 
 # Number of rotational levels: J=1 to J=3
 DEF N_LEVELS = 3
+# Number of model parameters
+DEF N_PARAMS = 4
 
 
 # Initialize statically allocated C arrays with data values for each
@@ -100,36 +102,6 @@ for i in range(N_LEVELS):
     TRANS[i].tau_wts = TAU_WTS[i]
 
 
-PAR_NAMES = ['voff', 'tex', 'ltau', 'sigm']
-
-PAR_VARIABLES_ASCII = ['v', 'Tx', 'lt', 's']
-
-TEX_LABELS = [
-        r'$v_\mathrm{lsr} \ [\mathrm{km\, s^{-1}}]$',
-        r'$T_\mathrm{ex} \ [\mathrm{K}]$',
-        r'$\log(\tau_0)$',
-        r'$\sigma_\mathrm{v} \ [\mathrm{km\, s^{-1}}]$',
-]
-
-TEX_LABELS_NU = [  # without units
-        r'$v_\mathrm{lsr}$',
-        r'$T_\mathrm{ex}$',
-        r'$\log(\tau_0)$',
-        r'$\sigma_\mathrm{v}$',
-]
-
-
-def get_par_names(ncomp=None):
-    if ncomp is not None:
-        return [
-                f'{label}{n}'
-                for label in PAR_VARIABLES_ASCII
-                for n in range(1, ncomp+1)
-        ]
-    else:
-        return PAR_VARIABLES_ASCII
-
-
 cdef class DiazenyliumSpectrum(HyperfineSpectrum):
     def __init__(self, xarr, data, noise, trans_id=1):
         """
@@ -169,7 +141,7 @@ cdef void c_nnhp_predict(DiazenyliumSpectrum s, double *params,
             long ndim) nogil:
     cdef:
         long i
-        long ncomp = ndim // 4
+        long ncomp = ndim // N_PARAMS
         double voff, tex, ltau, sigm
         Transition t = s.trans
     for i in range(s.size):
@@ -212,7 +184,7 @@ cdef class DiazenyliumRunner(Runner):
         cdef:
             DiazenyliumSpectrum spec
         assert ncomp > 0
-        self.n_model = 4
+        self.n_model = N_PARAMS
         self.spectra = spectra
         self.utrans = utrans
         self.ncomp = ncomp
@@ -258,11 +230,40 @@ cdef class DiazenyliumRunner(Runner):
             c_nnhp_predict(spec, &params[0], self.ndim)
 
 
-# Objects renamed for generic use
-MODEL_NAME = 'diazenylium'
+# Aliases and metadata for external use at module level scope
+N = N_PARAMS
+NAME = 'diazenylium'
 model_predict = nnhp_predict
 ModelSpectrum = DiazenyliumSpectrum
 ModelRunner = DiazenyliumRunner
+
+PAR_NAMES = ['voff', 'tex', 'ltau', 'sigm']
+PAR_NAMES_SHORT = ['v', 'Tx', 'lt', 's']
+
+TEX_LABELS = [
+        r'$v_\mathrm{lsr}$',
+        r'$T_\mathrm{ex}$',
+        r'$\log(\tau_0)$',
+        r'$\sigma_\mathrm{v}$',
+]
+
+TEX_LABELS_WITH_UNITS = [
+        r'$v_\mathrm{lsr} \ [\mathrm{km\, s^{-1}}]$',
+        r'$T_\mathrm{ex} \ [\mathrm{K}]$',
+        r'$\log(\tau_0)$',
+        r'$\sigma_\mathrm{v} \ [\mathrm{km\, s^{-1}}]$',
+]
+
+
+def get_par_names(ncomp=None):
+    if ncomp is not None:
+        return [
+                f'{label}{n}'
+                for label in PAR_NAMES_SHORT
+                for n in range(1, ncomp+1)
+        ]
+    else:
+        return PAR_NAMES_SHORT
 
 
 ##############################################################################

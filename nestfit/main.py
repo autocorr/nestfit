@@ -7,6 +7,7 @@ os.environ['HDF5_USE_FILE_LOCKING'] = 'FALSE'
 
 import time
 import shutil
+import inspect
 import warnings
 import itertools
 import multiprocessing
@@ -20,6 +21,7 @@ import spectral_cube
 from astropy import (convolution, units)
 from astropy.io import fits
 
+from nestfit.models import MODELS
 from nestfit.synth_spectra import get_test_spectra
 from nestfit.core.core import (Dumper, run_multinest)
 from nestfit.prior_constructors import get_irdc_priors
@@ -230,6 +232,17 @@ class HdfStore:
         except KeyError:
             self.hdf.attrs['nchunks'] = nchunks
             self.nchunks = nchunks
+        try:
+            model_name = self.hdf.attrs['model_name']
+            self.model = MODELS[model_name]
+        except KeyError:
+            self.model = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.close()
 
     @property
     def chunk_paths(self):
@@ -323,6 +336,16 @@ class HdfStore:
         self.hdf.attrs['lnZ_threshold'] = fitter.lnZ_thresh
         self.hdf.attrs['n_max_components'] = fitter.ncomp_max
         self.hdf.attrs['multinest_kwargs'] = str(fitter.mn_kwargs)
+
+    def insert_model_metadata(self, runner_cls):
+        module = inspect.getmodule(runner_cls)
+        assert self.is_open
+        self.hdf.attrs['n_params'] = module.N
+        self.hdf.attrs['model_name'] = module.NAME
+        self.hdf.attrs['par_names'] = module.PAR_NAMES
+        self.hdf.attrs['par_names_short'] = module.PAR_NAMES_SHORT
+        self.hdf.attrs['tex_labels'] = module.TEX_LABELS
+        self.hdf.attrs['tex_labels_with_units'] = module.TEX_LABELS_WITH_UNITS
 
 
 class CubeFitter:
@@ -426,6 +449,7 @@ class CubeFitter:
         store = HdfStore(store_name, nchunks=nproc)
         store.insert_header(self.stack)
         store.insert_fitter_pars(self)
+        store.insert_model_metadata(self.runner_cls)
         # create list of indices for each process
         indices = get_multiproc_indices(self.stack.spatial_shape, store.nchunks)
         if store.nchunks == 1:

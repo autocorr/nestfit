@@ -10,11 +10,15 @@ include "array_sizes.pxi"
 from nestfit.core.core cimport (Spectrum, Runner)
 
 
+# Number of model parameters
+DEF N_PARAMS = 3
+
+
 cdef void c_gauss_predict(Spectrum s, double *params, int ndim) nogil:
     cdef:
         int i, j
         int nu_lo_ix, nu_hi_ix
-        int ncomp = ndim // 3
+        int ncomp = ndim // N_PARAMS
         double voff, sigm, peak
         double nu, nu_width, nu_cen, nu_denom
         double nu_cutoff, nu_lo, nu_hi
@@ -74,7 +78,7 @@ cdef class GaussianRunner(Runner):
             Natural log global evidence from the MultiNest run.
         """
         assert ncomp > 0
-        self.n_model = 4
+        self.n_model = N_PARAMS
         self.spectrum = spectrum
         self.utrans = utrans
         self.ncomp = ncomp
@@ -108,10 +112,37 @@ cdef class GaussianRunner(Runner):
         c_gauss_predict(self.spectrum, &params[0], self.ndim)
 
 
-# Objects renamed for generic use
-MODEL_NAME = 'gaussian'
+# Aliases and metadata for external use at module level scope
+N = N_PARAMS
+NAME = 'gaussian'
 model_predict = gauss_predict
 ModelSpectrum = Spectrum
 ModelRunner = GaussianRunner
+
+PAR_NAMES = ['voff', 'sigm', 'peak']
+PAR_NAMES_SHORT = ['v', 's', 'pk']
+
+TEX_LABELS = [
+        r'$v_\mathrm{lsr}$',
+        r'$\sigma_\mathrm{v}$',
+        r'$T_\mathrm{pk}$',
+]
+
+TEX_LABELS_WITH_UNITS = [
+        r'$v_\mathrm{lsr} \ [\mathrm{km\, s^{-1}}]$',
+        r'$\sigma_\mathrm{v} \ [\mathrm{km\, s^{-1}}]$',
+        r'$T_\mathrm{pk} \ [\mathrm{K}]$',
+]
+
+
+def get_par_names(ncomp=None):
+    if ncomp is not None:
+        return [
+                f'{label}{n}'
+                for label in PAR_NAMES_SHORT
+                for n in range(1, ncomp+1)
+        ]
+    else:
+        return PAR_NAMES_SHORT
 
 

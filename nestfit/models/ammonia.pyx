@@ -28,6 +28,9 @@ DEF NORTH = 17  # out of 51
 # Number of rotational levels: (1,1) thru (9,9)
 DEF N_LEVELS = 9
 
+# Number of model parameters
+DEF N_PARAMS = 6
+
 
 # Initialize statically allocated C arrays with data values for each
 # transition. Values taken from:
@@ -238,40 +241,6 @@ for i in range(N_LEVELS):
     TRANS[i].tau_wts = TAU_WTS[i]
 
 
-PAR_NAMES = ['voff', 'trot', 'tex', 'ntot', 'sigm', 'orth']
-
-PAR_VARIABLES_ASCII = ['v', 'Tk', 'Tx', 'N', 's', 'o']
-
-TEX_LABELS = [
-        r'$v_\mathrm{lsr} \ [\mathrm{km\, s^{-1}}]$',
-        r'$T_\mathrm{rot} \ [\mathrm{K}]$',
-        r'$T_\mathrm{ex} \ [\mathrm{K}]$',
-        r'$\log(N) \ [\log(\mathrm{cm^{-2}})]$',
-        r'$\sigma_\mathrm{v} \ [\mathrm{km\, s^{-1}}]$',
-        r'$f_\mathrm{o}$',
-]
-
-TEX_LABELS_NU = [  # without units
-        r'$v_\mathrm{lsr}$',
-        r'$T_\mathrm{rot}$',
-        r'$T_\mathrm{ex}$',
-        r'$\log(N_\mathrm{p})$',
-        r'$\sigma_\mathrm{v}$',
-        r'$f_\mathrm{o}$',
-]
-
-
-def get_par_names(ncomp=None):
-    if ncomp is not None:
-        return [
-                f'{label}{n}'
-                for label in PAR_VARIABLES_ASCII
-                for n in range(1, ncomp+1)
-        ]
-    else:
-        return PAR_VARIABLES_ASCII
-
-
 cdef class AmmoniaSpectrum(HyperfineSpectrum):
     def __init__(self, xarr, data, noise, trans_id=1):
         """
@@ -358,7 +327,7 @@ cdef void c_amm_predict(AmmoniaSpectrum s, double *params, long ndim,
             bint cold, bint lte) nogil:
     cdef:
         long i
-        long ncomp = ndim // 6
+        long ncomp = ndim // N_PARAMS
         double trot, tex, ntot, sigm, voff, orth
         double zlev, qtot, species_frac, pop_rotstate
         double expterm, fracterm, widthterm, tau_main
@@ -430,7 +399,7 @@ cdef class AmmoniaRunner(Runner):
         cdef:
             AmmoniaSpectrum spec
         assert ncomp > 0
-        self.n_model = 6
+        self.n_model = N_PARAMS
         self.spectra = spectra
         self.utrans = utrans
         self.ncomp = ncomp
@@ -478,11 +447,44 @@ cdef class AmmoniaRunner(Runner):
             c_amm_predict(spec, &params[0], self.ndim, self.cold, self.lte)
 
 
-# Objects renamed for generic use
-MODEL_NAME = 'ammonia'
+# Aliases and metadata for external use at module level scope
+N = N_PARAMS
+NAME = 'ammonia'
 model_predict = amm_predict
 ModelSpectrum = AmmoniaSpectrum
 ModelRunner = AmmoniaRunner
+
+PAR_NAMES = ['voff', 'trot', 'tex', 'ntot', 'sigm', 'orth']
+PAR_NAMES_SHORT = ['v', 'Tk', 'Tx', 'N', 's', 'o']
+
+TEX_LABELS = [
+        r'$v_\mathrm{lsr}$',
+        r'$T_\mathrm{rot}$',
+        r'$T_\mathrm{ex}$',
+        r'$\log(N_\mathrm{p})$',
+        r'$\sigma_\mathrm{v}$',
+        r'$f_\mathrm{o}$',
+]
+
+TEX_LABELS_WITH_UNITS = [
+        r'$v_\mathrm{lsr} \ [\mathrm{km\, s^{-1}}]$',
+        r'$T_\mathrm{rot} \ [\mathrm{K}]$',
+        r'$T_\mathrm{ex} \ [\mathrm{K}]$',
+        r'$\log(N) \ [\log(\mathrm{cm^{-2}})]$',
+        r'$\sigma_\mathrm{v} \ [\mathrm{km\, s^{-1}}]$',
+        r'$f_\mathrm{o}$',
+]
+
+
+def get_par_names(ncomp=None):
+    if ncomp is not None:
+        return [
+                f'{label}{n}'
+                for label in PAR_NAMES_SHORT
+                for n in range(1, ncomp+1)
+        ]
+    else:
+        return PAR_NAMES_SHORT
 
 
 ##############################################################################

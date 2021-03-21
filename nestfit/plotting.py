@@ -374,10 +374,10 @@ def plot_mext_evdiff(sp, outname='mext_evdiff', conv=True):
     sp.save(f'{outname}')
 
 
-def plot_nbest(sp, outname='nbest'):
+def plot_nbest(sp, outname='nbest', vmax=2):
     data = sp.store.hdf['/products/nbest']
     fig, ax = plt.subplots(figsize=sp.get_figsize(), subplot_kw={'projection': sp.wcs})
-    im, cbar = sp.imshow_discrete(ax, data, vmin=0, vmax=2)
+    im, cbar = sp.imshow_discrete(ax, data, vmin=0, vmax=vmax)
     cbar.set_label(r'$N_\mathrm{comp}$')
     sp.add_int_contours(ax)
     sp.add_field_mask_contours(ax)
