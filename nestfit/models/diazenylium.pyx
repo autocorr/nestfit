@@ -258,6 +258,13 @@ cdef class DiazenyliumRunner(Runner):
             c_nnhp_predict(spec, &params[0], self.ndim)
 
 
+# Objects renamed for generic use
+MODEL_NAME = 'diazenylium'
+model_predict = nnhp_predict
+ModelSpectrum = DiazenyliumSpectrum
+ModelRunner = DiazenyliumRunner
+
+
 ##############################################################################
 #                                 Tests
 ##############################################################################

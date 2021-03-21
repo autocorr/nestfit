@@ -478,6 +478,13 @@ cdef class AmmoniaRunner(Runner):
             c_amm_predict(spec, &params[0], self.ndim, self.cold, self.lte)
 
 
+# Objects renamed for generic use
+MODEL_NAME = 'ammonia'
+model_predict = amm_predict
+ModelSpectrum = AmmoniaSpectrum
+ModelRunner = AmmoniaRunner
+
+
 ##############################################################################
 #                                 Tests
 ##############################################################################

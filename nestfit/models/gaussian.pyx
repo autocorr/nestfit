@@ -108,3 +108,10 @@ cdef class GaussianRunner(Runner):
         c_gauss_predict(self.spectrum, &params[0], self.ndim)
 
 
+# Objects renamed for generic use
+MODEL_NAME = 'gaussian'
+model_predict = gauss_predict
+ModelSpectrum = Spectrum
+ModelRunner = GaussianRunner
+
+

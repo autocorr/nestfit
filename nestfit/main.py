@@ -220,7 +220,7 @@ class HdfStore:
         store_name : str
         nchunks : int
         """
-        self.store_name = store_name
+        self.store_name = str(store_name)
         self.store_dir = Path(check_ext(self.store_name, ext='store'))
         self.store_dir.mkdir(parents=True, exist_ok=True)
         # FIXME Perform error handling for if HDF file is already open
