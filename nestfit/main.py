@@ -1066,8 +1066,10 @@ def deblend_hf_intensity(store, stack, runner):
     # broadcasting along the last axis (S) for the velocity bins.
     dv_bin = abs(bins[0,1] - bins[0,0])
     vaxis = bins[0].reshape(1, 1, 1, 1, -1)
-    sigm = np.expand_dims(pmap[:,:,4,:], (3, 4))
-    vcen = np.expand_dims(pmap[:,:,0,:], (3, 4))
+    ix_vcen = store.model.IX_VCEN
+    ix_sigm = store.model.IX_SIGM
+    vcen = np.expand_dims(pmap[:,:,ix_vcen,:], (3, 4))
+    sigm = np.expand_dims(pmap[:,:,ix_sigm,:], (3, 4))
     norm_fact = dv_bin / (sigm * np.sqrt(2 * np.pi))
     amp = intint[...,np.newaxis]
     hfdb = norm_fact * amp * np.exp(-0.5 * ((vaxis - vcen) / sigm)**2)

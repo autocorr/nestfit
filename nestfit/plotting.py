@@ -2,6 +2,7 @@
 
 import itertools
 from pathlib import Path
+from collections import Iterable
 
 import numpy as np
 from scipy import special
@@ -61,6 +62,10 @@ def get_amm_psk_xarrs(stack):
             for i, cube in enumerate(stack.cubes)
     ]
     return varrs
+
+
+def validate_axes_as_iterable(axes):
+    return [axes] if not isinstance(axes, Iterable) else axes
 
 
 def save_figure(filen, dpi=300):
@@ -157,6 +162,13 @@ class StorePlotter:
         self.wcs = WCS(store.read_header(full=False))
         self.ncomp_max = store.hdf.attrs['n_max_components']
         self.pad = PaddingConfig() if pad is None else pad
+        # Model parameters and labels
+        self.n_params = store.hdf.attrs['n_params']
+        self.model_name = store.hdf.attrs['model_name']
+        self.par_names = store.hdf.attrs['par_names']
+        self.par_names_short = store.hdf.attrs['par_names_short']
+        self.tex_labels = store.hdf.attrs['tex_labels']
+        self.tex_labels_with_units = store.hdf.attrs['tex_labels_with_units']
 
     @property
     def shape(self):
@@ -401,19 +413,18 @@ def plot_conv_nbest(sp, outname='conv_nbest'):
 
 
 def plot_deblend_peak(sp, outname='hf_deblend_peak'):
-    labels = (r'(1,1)', r'(2,2)')
     data = sp.store.hdf['/products/peak_intensity']
     data = np.nanmax(data, axis=1)
     n_trans, _, _ = data.shape
-    figsize = sp.get_figsize(nrows=1, ncols=2)
+    figsize = sp.get_figsize(nrows=1, ncols=n_trans)
     fig, axes = plt.subplots(nrows=1, ncols=n_trans, figsize=figsize,
             subplot_kw={'projection': sp.wcs})
+    axes = validate_axes_as_iterable(axes)
     vmin = 0
     vmax = np.nanmax(data)
     for ii, ax in enumerate(axes):
         img = data[ii,:,:]
         im = ax.imshow(img, vmin=vmin, vmax=vmax, cmap=HOT_CMAP)
-        sp.set_corner_label(ax, labels[ii])
         sp.format_labels_for_grid(ax)
         sp.add_field_mask_contours(ax)
         sp.add_beam(ax)
@@ -431,15 +442,15 @@ def plot_deblend_intintens(sp, vmax=10, outname='hf_deblend_intintens'):
     ----------
     vmax : number, default 10
     """
-    labels = (r'(1,1)', r'(2,2)')
     data = sp.store.hdf['/products/integrated_intensity']
     mask = sp.store.hdf['/products/peak_intensity'][:,0,:,:]  # first component
     data = np.nansum(data, axis=1)
     data[np.isnan(mask)] = np.nan
     n_trans, _, _ = data.shape
-    figsize = sp.get_figsize(nrows=1, ncols=2)
+    figsize = sp.get_figsize(nrows=1, ncols=n_trans)
     fig, axes = plt.subplots(nrows=1, ncols=n_trans, figsize=figsize,
             subplot_kw={'projection': sp.wcs})
+    axes = validate_axes_as_iterable(axes)
     vmin = 0
     if vmax is None:
         vmax = np.nanmax(data)
@@ -449,7 +460,6 @@ def plot_deblend_intintens(sp, vmax=10, outname='hf_deblend_intintens'):
     for ii, ax in enumerate(axes):
         img = data[ii,:,:]
         im = ax.imshow(img, vmin=vmin, vmax=vmax, cmap=STR_CMAP)
-        sp.set_corner_label(ax, labels[ii])
         sp.format_labels_for_grid(ax)
         sp.add_field_mask_contours(ax)
         sp.add_beam(ax)
@@ -499,6 +509,7 @@ def plot_map_props(sp, outname='map_props'):
     for ii in range(n_params):
         fig, axes = plt.subplots(nrows=1, ncols=n_mod, figsize=figsize,
                 subplot_kw={'projection': sp.wcs})
+        axes = validate_axes_as_iterable(axes)
         vmin, vmax = sp.get_par_limits(ii)
         for jj, ax in enumerate(axes):
             img = data[jj,ii,:,:]
@@ -509,7 +520,7 @@ def plot_map_props(sp, outname='map_props'):
             sp.add_beam(ax)
         cbar = sp.add_colorbar(im)
         cbar.minorticks_on()
-        cbar.set_label(ammonia.TEX_LABELS[ii])
+        cbar.set_label(sp.tex_labels_with_units[ii])
         sp.subplots_adjust()
         sp.save(f'{outname}_par{ii}')
 
@@ -533,6 +544,7 @@ def plot_quan_props(sp, quan_ix=4, outname='props', conv=True):
         figsize = sp.get_figsize(nrows=1, ncols=n_mod)
         fig, axes = plt.subplots(nrows=1, ncols=n_mod, figsize=figsize,
                 subplot_kw={'projection': sp.wcs})
+        axes = validate_axes_as_iterable(axes)
         vmin, vmax = sp.get_par_limits(ii, quan_ix=quan_ix)
         for jj, ax in enumerate(axes):
             img = data[jj,ii,:,:]
@@ -542,7 +554,7 @@ def plot_quan_props(sp, quan_ix=4, outname='props', conv=True):
             sp.add_field_mask_contours(ax)
             sp.add_beam(ax)
         cbar = sp.add_colorbar(im)
-        cbar.set_label(ammonia.TEX_LABELS[ii])
+        cbar.set_label(sp.tex_labels_with_units[ii])
         sp.subplots_adjust()
         sp.save(f'{outname}_quan{quan_ix}_{prefix}{ii}')
 
@@ -568,6 +580,7 @@ def plot_err_props(sp, outname='err', conv=True):
         figsize = sp.get_figsize(nrows=1, ncols=n_mod)
         fig, axes = plt.subplots(nrows=1, ncols=n_mod, figsize=figsize,
                 subplot_kw={'projection': sp.wcs})
+        axes = validate_axes_as_iterable(axes)
         vmin = 0
         _, vmax = sp.get_err_limits(ii)
         for jj, ax in enumerate(axes):
@@ -578,7 +591,7 @@ def plot_err_props(sp, outname='err', conv=True):
             sp.add_field_mask_contours(ax)
             sp.add_beam(ax)
         cbar = sp.add_colorbar(im)
-        cbar.set_label(r'$\delta\!$ ' + ammonia.TEX_LABELS[ii])
+        cbar.set_label(r'$\delta\!$ ' + sp.tex_labels_with_units[ii])
         sp.subplots_adjust()
         sp.save(f'{outname}_{prefix}{ii}')
 
@@ -627,7 +640,7 @@ def plot_amm_post_stack(sp, pix, n_model=1, outname='margs', orth=False):
                     linestyle='dashed', zorder=3)
         ax.set_xlim(bins.min(), bins.max())
         ax.set_ylim(0, 1.1*max(post[:,i_p,:].max(), conv[:,i_p,:].max()))
-        ax.set_xlabel(ammonia.TEX_LABELS[i_p])
+        ax.set_xlabel(sp.tex_labels_with_units[i_p])
         ax.xaxis.set_ticks_position('bottom')
         ax.yaxis.set_ticks_position('left')
     ax.set_ylabel('PDF')
@@ -798,7 +811,7 @@ def plot_amm_spec_grid(sp, stack, pix, half_width, outname='specgrid',
             if has_nans:
                 continue
             xarr, obs_data, noise, trans_id = spec_data
-            amms = ammonia.AmmoniaSpectrum(*spec_data)
+            nf_spec = sp.store.model.ModelSpectrum(*spec_data)
             local_ymax = np.nanmax(obs_data)
             if local_ymax > ymax:
                 ymax = local_ymax
@@ -814,8 +827,8 @@ def plot_amm_spec_grid(sp, stack, pix, half_width, outname='specgrid',
                 params = map_params[i_m,:,i_b,i_l].copy()
                 if np.isnan(params).any():
                     continue
-                ammonia.amm_predict(amms, params)
-                mod_spec = amms.get_spec()
+                sp.store.model.model_predict(nf_spec, params)
+                mod_spec = nf_spec.get_spec()
                 c_mod_spec = smooth_spec(mod_spec)
                 this_spec = this_spec + c_mod_spec
                 x = varr[vmask][::nsmooth]

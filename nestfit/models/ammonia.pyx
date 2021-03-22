@@ -449,6 +449,8 @@ cdef class AmmoniaRunner(Runner):
 
 # Aliases and metadata for external use at module level scope
 N = N_PARAMS
+IX_VCEN = 0
+IX_SIGM = 4
 NAME = 'ammonia'
 model_predict = amm_predict
 ModelSpectrum = AmmoniaSpectrum

@@ -232,6 +232,8 @@ cdef class DiazenyliumRunner(Runner):
 
 # Aliases and metadata for external use at module level scope
 N = N_PARAMS
+IX_VCEN = 0
+IX_SIGM = 3
 NAME = 'diazenylium'
 model_predict = nnhp_predict
 ModelSpectrum = DiazenyliumSpectrum

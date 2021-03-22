@@ -114,6 +114,8 @@ cdef class GaussianRunner(Runner):
 
 # Aliases and metadata for external use at module level scope
 N = N_PARAMS
+IX_VCEN = 0
+IX_SIGM = 1
 NAME = 'gaussian'
 model_predict = gauss_predict
 ModelSpectrum = Spectrum
