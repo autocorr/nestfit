@@ -59,9 +59,15 @@ dataset names can be joined by a ``"/"``, so a valid path to the dataset
     - lnZ_threshold: evidence threshold used when selecting one model over another
     - multinest_kwargs : additional keyword arguments passed to MultiNest
     - n_max_components : the maximum number of components to iteratively fit
-    - naxis1 : the number of longitude pixels
-    - naxis2 : the number of latitude pixels
-    - nchunks : the number of HDF chunk files in the store
+    - naxis1 : number of longitude pixels
+    - naxis2 : number of latitude pixels
+    - nchunks : number of HDF chunk files in the store
+    - model_name : name of the model, corresponds to NestFit module name
+    - n_params : number of model parameters per velocity component
+    - par_names : ascii names of the model parameters
+    - par_names_short : one to two character parameter names
+    - tex_labels : TeX formatted parameter label names
+    - tex_labels_with_units : TeX formatted parameter label names with units
         * pix : hierarchical directory containing data for each pixel
             * <LON> : the longitude pixel number
                 * <LAT> : the latitude pixel number
