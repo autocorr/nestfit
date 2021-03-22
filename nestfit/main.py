@@ -1077,7 +1077,7 @@ def deblend_hf_intensity(store, stack, runner):
     store.create_dataset('peak_intensity', pkint.transpose(), group=dpath)
     store.create_dataset('integrated_intensity', intint.transpose(), group=dpath)
     # transpose (l, b, m, t, S) -> (t, m, S, b, l)
-    hfdb = hfdb.transpose((4, 3, 1, 0, 2))
+    hfdb = hfdb.transpose((3, 2, 4, 1, 0))
     store.create_dataset('hf_deblended', hfdb, group=dpath)
 
 
