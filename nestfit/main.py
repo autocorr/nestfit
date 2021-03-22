@@ -1060,8 +1060,8 @@ def deblend_hf_intensity(store, stack, runner):
             pkint[ i_l,i_b,i_m,j] = spec.max_spec
             intint[i_l,i_b,i_m,j] = spec.sum_spec
     # scale intensities by velocity channel width to put in K*km/s
-    intint[:,:,:,0] *= stack.cubes[0].dv
-    intint[:,:,:,1] *= stack.cubes[1].dv
+    for i_t, cube in enumerate(stack.cubes):
+        intint[:,:,:,i_t] *= cube.dv
     # Desired dimensions (l, b, m, t, S) for `hfdb` below. It is created by
     # broadcasting along the last axis (S) for the velocity bins.
     dv_bin = abs(bins[0,1] - bins[0,0])
