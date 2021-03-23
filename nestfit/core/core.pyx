@@ -677,7 +677,7 @@ cdef void mn_dump(int *n_samples, int *n_live, int *n_params,
     # posterior samples
     post_shape = (n_samples[0], n_params[0]+2)
     post_arr = mn_dptr_to_ndarray(posterior, post_shape)
-    group.create_dataset('posteriors', data=post_arr)
+    group.create_dataset('posteriors', data=post_arr.astype('float32'))
     group.create_dataset('marginals', data=dumper.calc_marginals(post_arr))
     # posterior statistics
     pcon_shape = (1, 4*n_params[0])

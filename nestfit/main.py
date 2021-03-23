@@ -793,8 +793,8 @@ def aggregate_run_products(store):
     nbest_data = hdf[f'{dpath}/conv_nbest'][...].transpose()
     # get list of marginal quantile information out of store
     ncomp_max = hdf.attrs['n_max_components']
+    n_params = hdf.attrs['n_params']
     test_group = hdf[f'pix/{n_lon//2}/{n_lat//2}/1']  # FIXME may not exist
-    n_params  = test_group.attrs['n_params']
     marg_quan = test_group.attrs['marg_quantiles']
     n_margs   = len(marg_quan)
     # dimensions (l, b, p, m) for MAP-parameter values
@@ -859,8 +859,7 @@ def aggregate_run_pdfs(store, par_bins=None):
     n_lon = hdf.attrs['naxis1']
     n_lat = hdf.attrs['naxis2']
     ncomp_max = hdf.attrs['n_max_components']
-    test_group = hdf[f'pix/{n_lon//2}/{n_lat//2}/1']  # FIXME may not exist
-    n_params  = test_group.attrs['n_params']
+    n_params = hdf.attrs['n_params']
     # If no bins set, set bins from linear intervals of the posteriors
     if par_bins is None:
         n_bins = 200
@@ -904,7 +903,7 @@ def aggregate_run_pdfs(store, par_bins=None):
     #                 0  1  2  3  4  5
     #             to (r, m, p, h, b, l)
     #                 2  4  3  5  1  0
-    histdata = histdata.transpose((2, 4, 3, 5, 1, 0))
+    histdata = histdata.transpose((2, 4, 3, 5, 1, 0)).astype('float32')
     store.create_dataset('post_pdfs', histdata, group=dpath)
 
 
@@ -968,6 +967,7 @@ def convolve_post_pdfs(store, kernel, evid_weight=True):
     cdata /= np.nansum(cdata, axis=3, keepdims=True)
     # re-mask the NaN positions
     cdata[np.isnan(data)] = np.nan
+    cdata = cdata.astype('float32')
     store.create_dataset('conv_post_pdfs', cdata, group=dpath)
 
 
@@ -1011,7 +1011,7 @@ def quantize_conv_marginals(store):
             y = data[i_r,i_m,i_p,i_b,i_l]
             margs[i_r,i_m,i_p,i_b,i_l,:] = np.interp(quan, y, x)
     # transpose back to conventional shape (r, m, p, M, b, l)
-    margs = margs.transpose((0, 1, 2, 5, 3, 4))
+    margs = margs.transpose((0, 1, 2, 5, 3, 4)).astype('float32')
     store.create_dataset('conv_marginals', margs, group=dpath)
 
 
@@ -1083,7 +1083,7 @@ def deblend_hf_intensity(store, stack, runner):
     store.create_dataset('peak_intensity', pkint.transpose(), group=dpath)
     store.create_dataset('integrated_intensity', intint.transpose(), group=dpath)
     # transpose (l, b, m, t, S) -> (t, m, S, b, l)
-    hfdb = hfdb.transpose((3, 2, 4, 1, 0))
+    hfdb = hfdb.transpose((3, 2, 4, 1, 0)).astype('float32')
     store.create_dataset('hf_deblended', hfdb, group=dpath)
 
 
@@ -1142,7 +1142,7 @@ def generate_predicted_profiles(store, stack, runner):
             mcube[i_l,i_b,i_m,:] = spec.get_spec()
     for mcube, dcube in zip(model_cubes, stack):
         # transpose (l, b, m, S) -> (m, S, b, l)
-        mcube = mcube.transpose((2, 3, 1, 0))
+        mcube = mcube.transpose((2, 3, 1, 0)).astype('float32')
         store.create_dataset(f'model_spec_trans{dcube.trans_id}', mcube, group=dpath)
 
 
