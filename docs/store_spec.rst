@@ -115,6 +115,7 @@ dataset names can be joined by a ``"/"``, so a valid path to the dataset
             = peak_intensity       (n=4; t, m, b, l)
             = integrated_intensity (n=4; t, m, b, l)
             = hf_deblended         (n=5; t, m, S, b, l)
+            = model_spec_trans<ID> (n=4; m, S, b, l)
         * full_header : all header keywords stored as attributes
         * simple_header : subset of coordinate system related header keywords
 

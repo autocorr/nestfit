@@ -40,6 +40,7 @@ from nestfit.main import (
         convolve_post_pdfs,
         quantize_conv_marginals,
         deblend_hf_intensity,
+        generate_predicted_profiles,
         postprocess_run,
 )
 

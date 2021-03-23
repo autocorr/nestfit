@@ -12,6 +12,7 @@ import warnings
 import itertools
 import multiprocessing
 from pathlib import Path
+from collections import Iterable
 
 import h5py
 import numpy as np
@@ -86,6 +87,7 @@ class DataCube:
         self.shape = self.data.shape
         # NOTE data is transposed so (s, b, l) -> (l, b, s)
         self.spatial_shape = (self.shape[0], self.shape[1])
+        self.nchan = self.shape[2]
         if self.noise_map.shape is not None:
             assert self.spatial_shape == self.noise_map.shape
 
@@ -158,9 +160,13 @@ class DataCube:
 
 class CubeStack:
     def __init__(self, cubes):
-        assert cubes
+        assert isinstance(cubes, Iterable)
         self.cubes = cubes
         self.n_cubes = len(cubes)
+
+    def __iter__(self):
+        for cube in self.cubes:
+            yield cube
 
     @property
     def full_header(self):
@@ -1012,7 +1018,7 @@ def quantize_conv_marginals(store):
 def deblend_hf_intensity(store, stack, runner):
     """
     Calculate integrated and peak intensity maps from the maximum a posteriori
-    parameter values. Also produce spectral cubes that have had the hyperfine
+    parameter values. Also produce line profiles that have had the hyperfine
     splitting deblended.
     Products include:
 
@@ -1056,9 +1062,9 @@ def deblend_hf_intensity(store, stack, runner):
         if np.any(np.isnan(params)):
             continue
         runner.predict(params)
-        for j, spec in enumerate(runner.get_spectra()):
-            pkint[ i_l,i_b,i_m,j] = spec.max_spec
-            intint[i_l,i_b,i_m,j] = spec.sum_spec
+        for i_t, spec in enumerate(runner.get_spectra()):
+            pkint[ i_l,i_b,i_m,i_t] = spec.max_spec
+            intint[i_l,i_b,i_m,i_t] = spec.sum_spec
     # scale intensities by velocity channel width to put in K*km/s
     for i_t, cube in enumerate(stack.cubes):
         intint[:,:,:,i_t] *= cube.dv
@@ -1081,6 +1087,65 @@ def deblend_hf_intensity(store, stack, runner):
     store.create_dataset('hf_deblended', hfdb, group=dpath)
 
 
+def generate_predicted_profiles(store, stack, runner):
+    """
+    Calculate emergent intensity profiles for the maximum a posterior parameter
+    values for each transition. Note that these products are N-velocity
+    components times as large as the original data cubes, so can be large.
+    Products include:
+
+        * 'model_spec_trans<TRANS_ID>' (m, S, b, l)
+
+    Parameters
+    ----------
+    store : HdfStore
+    stack : CubeStack
+    runner: Runner
+    """
+    assert runner.ncomp == 1
+    print(':: Generating MAP model spectral profiles')
+    hdf = store.hdf
+    dpath = store.dpath
+    nspec = stack.n_cubes
+    cube_shape = stack.spatial_shape
+    # dimensions (p, h)
+    bins = hdf[f'{dpath}/pdf_bins'][...]
+    nbins = bins.shape[1]
+    # dimensions (l, b, p, m)
+    pmap = hdf[f'{dpath}/nbest_MAP'][...].transpose()
+    # The cubes do not necessarily have the same spectral axes, so separate
+    # ndarrays must be used for each transition.
+    # dimensions (l, b, m, S)
+    #   for (lon, lat, model, channel)
+    # Note that the spectral shape (S) of the *cube* is used, not the Prior,
+    # as used making the deblended line profiles.
+    model_cubes = [
+            nans((
+                pmap.shape[0],
+                pmap.shape[1],
+                pmap.shape[3],
+                dcube.nchan,
+            ))
+            for dcube in stack
+    ]
+    cart_prod = itertools.product(
+            range(pmap.shape[0]),
+            range(pmap.shape[1]),
+            range(pmap.shape[3]),
+    )
+    for i_l, i_b, i_m in cart_prod:
+        params = pmap[i_l,i_b,:,i_m].copy()  # make array contiguous
+        if np.any(np.isnan(params)):
+            continue
+        runner.predict(params)
+        for mcube, spec in zip(model_cubes, runner.get_spectra()):
+            mcube[i_l,i_b,i_m,:] = spec.get_spec()
+    for mcube, dcube in zip(model_cubes, stack):
+        # transpose (l, b, m, S) -> (m, S, b, l)
+        mcube = mcube.transpose((2, 3, 1, 0))
+        store.create_dataset(f'model_spec_trans{dcube.trans_id}', mcube, group=dpath)
+
+
 def create_fits_from_store(store, prefix='source'):
     """
     Create FITS files from the datasets in the HDF Store.
@@ -1096,7 +1161,7 @@ def create_fits_from_store(store, prefix='source'):
     # dimensions (p, h)
     bins = hdf[f'{dpath}/pdf_bins'][...]
     nbins = bins.shape[1]
-    vaxis = bins[0]  # FIXME NH3 specific
+    vaxis = bins[store.model.IX_VCEN]
     ### hyperfine deblended cube
     # dimensions (t, m, S, b, l)
     hfdb = hdf[f'{dpath}/hf_deblended'][...]
@@ -1157,6 +1222,7 @@ def postprocess_run(store, stack, runner, par_bins=None, evid_kernel=None,
     convolve_post_pdfs(store, post_kernel, evid_weight=evid_weight)
     quantize_conv_marginals(store)
     deblend_hf_intensity(store, stack, runner)
+    generate_predicted_profiles(store, stack, runner)
 
 
 ##############################################################################
