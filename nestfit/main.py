@@ -84,6 +84,7 @@ class DataCube:
         self._header = cube.header.copy()
         self.dv = self.get_chan_width(cube)
         self.data, self.xarr = self.data_from_cube(cube)
+        self.varr = self.velo_axis_from_cube(cube)
         self.shape = self.data.shape
         # NOTE data is transposed so (s, b, l) -> (l, b, s)
         self.spatial_shape = (self.shape[0], self.shape[1])
@@ -150,6 +151,19 @@ class DataCube:
         # the last or right-most in of the indices)
         data = cube._data.transpose().copy()
         return data, axis
+
+    def velo_axis_from_cube(self, cube):
+        varr = (
+                cube.with_spectral_unit('km/s', velocity_convention='radio')
+                .spectral_axis.value
+        )
+        # The frequency array `xarr` will be in units of Hertz and in ascending order,
+        # thus in order for the axes to match element-wise, the velocity axis must be
+        # in descending order.
+        if varr[1] > varr[0]:
+            return varr[::-1].copy()
+        else:
+            return varr.copy()
 
     def get_spec_data(self, i_lon, i_lat):
         arr = self.data[i_lon,i_lat,:]  # axes reversed from typical cube
@@ -1143,7 +1157,8 @@ def generate_predicted_profiles(store, stack, runner):
     for mcube, dcube in zip(model_cubes, stack):
         # transpose (l, b, m, S) -> (m, S, b, l)
         mcube = mcube.transpose((2, 3, 1, 0)).astype('float32')
-        store.create_dataset(f'model_spec_trans{dcube.trans_id}', mcube, group=dpath)
+        group = f'{dpath}/model_spec'
+        store.create_dataset(f'trans{dcube.trans_id}', mcube, group=group)
 
 
 def create_fits_from_store(store, prefix='source'):

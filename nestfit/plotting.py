@@ -768,23 +768,65 @@ def plot_amm_specfit_nsrun(sp, stack, pix, n_model=1, n_draw=50,
     ani.save(str(out_path), writer='ffmpeg', dpi=300)
 
 
-def plot_amm_spec_grid(sp, stack, pix, half_width, outname='specgrid',
-        i_trans=0, nsmooth=2, vwin=10):
+def plot_spec_grid(sp, cube, pix, rlon=10, rlat=10, nsmooth=2, vcen=None,
+        vwin=10, outname='specgrid', pix_step=1):
+    """
+    Plot a grid of spectra visualizing the contributions of the individual
+    model components.
+
+    Parameters
+    ----------
+    sp : StorePlotter
+    cube : DataCube
+    pix : (int, int)
+        Pixel index number for the longitude and latitude, respectively, of the
+        grid center spectrum.
+    half_widths : (int, int)
+        Radial number of spectra to plot in longitude and latitude,
+        respectively. The full grid will be ``2 * r_lon + 1`` in width and
+        height.
+    nsmooth : int
+        Number of pixels to smooth and decimate the spectra by (also reduces
+        file size). A 1D box kernel of the given channel width is used for
+        smoothing.
+    vcen : number, None
+        Center of the velocity window. If ``None`` the center of the axis is
+        used.
+        **units**: km/s
+    vwin : number
+        Full-width of the velocity window.
+        **units**: km/s
+    pix_step : int
+        Number of pixels to step when drawing the next grid square.
+    outname : str
+        File names are written according to:
+            ``f"{outname}_{lon_pix}_{lat_pix}_{dlon}x{dlat}_{pix_step}"``
+    """
+    rlon = int(rlon)
+    rlat = int(rlat)
     nsmooth = int(nsmooth)
+    pix_step = int(pix_step)
+    assert rlon > 0
+    assert rlat > 0
+    assert nsmooth > 0
+    assert pix_step > 0
     # center pixel
     lon_pix, lat_pix = pix
-    # radius for <-R- C -R->
-    rlon, rlat = half_width
+    # model cube derived from the MAP values
+    #   dimensions (m, S, b, l)
+    trans_id = cube.trans_id
+    mcube = sp.store.hdf[f'/products/model_spec/trans{trans_id}'][...]
+    # Best fit number of components
+    #   dimensions (b, l)
+    nbest = sp.store.hdf['/products/conv_nbest'][...]
     # grid shape
     dlon, dlat = 2*rlon+1, 2*rlat+1
     stamp_size = 0.3   # in
     stamp_sep  = 0.05  # in
-    varr = get_amm_psk_xarrs(stack)[i_trans].as_unit('km/s').value
-    vcen = (varr[0] + varr[-1]) / 2
+    varr = cube.varr
+    if vcen is None:
+        vcen = (varr[0] + varr[-1]) / 2
     vmask = (varr > vcen - vwin / 2) & (varr < vcen + vwin / 2)
-    # dimensions (m, p, b, l)
-    map_params = sp.store.hdf['/products/nbest_MAP'][...]
-    ncomp = map_params.shape[0]
     figsize = (
             stamp_size * dlon + stamp_sep * (dlon + 1),
             stamp_size * dlat + stamp_sep * (dlat + 1),
@@ -804,31 +846,28 @@ def plot_amm_spec_grid(sp, stack, pix, half_width, outname='specgrid',
     def smooth_spec(x):
         kernel = convolution.Box1DKernel(nsmooth)
         return convolution.convolve(x, kernel)
-    for i_ax, i_l in enumerate(range(lon_pix-rlon, lon_pix+rlon+1)):
-        for j_ax, i_b in enumerate(range(lat_pix-rlat, lat_pix+rlat+1)):
+    lon_range = range(lon_pix-pix_step*rlon, lon_pix+pix_step*rlon+1, pix_step)
+    lat_range = range(lat_pix-pix_step*rlat, lat_pix+pix_step*rlat+1, pix_step)
+    for i_ax, i_l in enumerate(lon_range):
+        for j_ax, i_b in enumerate(lat_range):
             ax = axes[-j_ax-1, i_ax]
-            *spec_data, has_nans = stack.cubes[i_trans].get_spec_data(i_l, i_b)
+            *spec_data, has_nans = cube.get_spec_data(i_l, i_b)
+            xarr, obs_data, noise, trans_id = spec_data
             if has_nans:
                 continue
-            xarr, obs_data, noise, trans_id = spec_data
-            nf_spec = sp.store.model.ModelSpectrum(*spec_data)
             local_ymax = np.nanmax(obs_data)
             if local_ymax > ymax:
                 ymax = local_ymax
             # TODO draw velocity and intensity reference markers
-            # draw observed spectrum
+            # Draw observed spectrum
             c_obs_data = smooth_spec(obs_data)
             ax.plot(varr[vmask][::nsmooth], obs_data[vmask][::nsmooth],
                     color='black', linewidth=0.5, zorder=10)
-            # draw model component fits
+            # Draw model component fits
             last_spec = np.zeros_like(obs_data)
             this_spec = np.zeros_like(obs_data)
-            for i_m in range(ncomp):
-                params = map_params[i_m,:,i_b,i_l].copy()
-                if np.isnan(params).any():
-                    continue
-                sp.store.model.model_predict(nf_spec, params)
-                mod_spec = nf_spec.get_spec()
+            for i_m in range(nbest[i_b,i_l]):
+                mod_spec = mcube[i_m,:,i_b,i_l]
                 c_mod_spec = smooth_spec(mod_spec)
                 this_spec = this_spec + c_mod_spec
                 x = varr[vmask][::nsmooth]
@@ -842,24 +881,24 @@ def plot_amm_spec_grid(sp, stack, pix, half_width, outname='specgrid',
     print(ymax)
     ax.set_xlim(vcen-vwin/2, vcen+vwin/2)
     ax.set_ylim(-2*noise, ymax)
-    sp.save(f'{outname}_{lon_pix}_{lat_pix}_{dlon}x{dlat}')
+    sp.save(f'{outname}_{lon_pix}_{lat_pix}_{dlon}x{dlat}_{pix_step}')
 
 
 ##############################################################################
 #                         Individual Plots
 ##############################################################################
 
-def plot_corner(group, outname='corner', truths=None):
+def plot_corner(store, group_name, outname='corner', truths=None):
+    n_params = store.hdf.attrs['n_params']
+    par_names = store.model.get_par_names()
+    par_labels = store.hdf.attrs['tex_labels_with_units']
+    group = store.hdf[group_name]
     ncomp = group.attrs['ncomp']
-    par_labels = ammonia.TEX_LABELS.copy()
-    par_labels[3] = r'$\log(N) \ [\log(\mathrm{cm^{-2}})]$'
-    n_params = group.attrs['n_params'] // ncomp
-    names = ammonia.get_par_names()
     post = group['posteriors'][...][:,:-2]  # posterior param values
     if truths is not None:
         markers = {
                 p: truths[i*ncomp:(i+1)*ncomp]
-                for i, p in zip(range(n_params), ammonia.get_par_names())
+                for i, p in zip(range(n_params), par_names)
         }
     else:
         markers = None
@@ -868,7 +907,7 @@ def plot_corner(group, outname='corner', truths=None):
     samples = [
             getdist.MCSamples(
                 samples=post[:,ii::ncomp],
-                names=names,
+                names=par_names,
                 labels=par_labels,
                 label=f'Component {ii+1}',
                 name_tag=f'{ii}',
@@ -888,18 +927,21 @@ def plot_corner(group, outname='corner', truths=None):
     plt.close('all')
 
 
-def plot_multicomp_velo_2corr(group, outname='velo_2corr', truths=None):
+def plot_multicomp_velo_2corr(store, group_name, outname='velo_2corr', truths=None):
+    group = store.hdf[group_name]
     ncomp = group.attrs['ncomp']
     assert ncomp == 2
-    n_params = group.attrs['n_params'] // ncomp
+    n_params = store.hdf.attrs['n_params']
     post = group['posteriors'][...][:,:-2]  # param values
-    names = ammonia.get_par_names(ncomp)
-    par_labels = [''] * 12
-    par_labels[0] = r'$v_\mathrm{lsr}\, (1) \ [\mathrm{km\,s^{-1}}]$'
-    par_labels[1] = r'$v_\mathrm{lsr}\, (2) \ [\mathrm{km\,s^{-1}}]$'
-    par_labels[8] = r'$\sigma_\mathrm{v}\, (1) \ [\mathrm{km\,s^{-1}}]$'
-    par_labels[9] = r'$\sigma_\mathrm{v}\, (2) \ [\mathrm{km\,s^{-1}}]$'
-    samples = getdist.MCSamples(samples=post, names=names, labels=par_labels,
+    par_names = store.model.get_par_names(ncomp)
+    ix_v = store.model.IX_VCEN
+    ix_s = store.model.IX_SIGM
+    par_labels = [''] * n_params * ncomp
+    par_labels[ncomp*ix_v  ] = r'$v_\mathrm{lsr}\, (1) \ [\mathrm{km\,s^{-1}}]$'
+    par_labels[ncomp*ix_v+1] = r'$v_\mathrm{lsr}\, (2) \ [\mathrm{km\,s^{-1}}]$'
+    par_labels[ncomp*ix_s  ] = r'$\sigma_\mathrm{v}\, (1) \ [\mathrm{km\,s^{-1}}]$'
+    par_labels[ncomp*ix_s+1] = r'$\sigma_\mathrm{v}\, (2) \ [\mathrm{km\,s^{-1}}]$'
+    samples = getdist.MCSamples(samples=post, names=par_names, labels=par_labels,
             sampler='nested')
     samples.updateSettings({'contours': [0.68, 0.90]})
     fig = gd_plt.get_subplot_plotter()
