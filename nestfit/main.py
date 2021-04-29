@@ -465,6 +465,24 @@ class CubeFitter:
         hdf.close()
 
     def fit_cube(self, store_name='run/test_cube', nproc=1, timeout=None):
+        """
+        Create an `HdfStore`, run NestFit on each pixel of the field, and
+        write the results to the store file.
+
+        Parameters
+        ----------
+        store_name : str
+            The name or path of the `HdfStore` file to create and store the
+            values in.
+        nproc : int
+            Number of Python processes to spawn using `multiprocessing`.
+            The cubes are striped in longitude per-process, and thus the
+            dimension of the longitude axis in pixels must be equal to
+            or greater than the number of processes.
+        timeout : bool, None
+            Timeout to use in the Python `multiprocessing` call to join
+            the processes. If `None`, no timeout is used.
+        """
         n_chan, n_lat, n_lon = self.stack.shape
         if nproc > n_lon:
             raise ValueError(
