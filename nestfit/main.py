@@ -466,6 +466,11 @@ class CubeFitter:
 
     def fit_cube(self, store_name='run/test_cube', nproc=1, timeout=None):
         n_chan, n_lat, n_lon = self.stack.shape
+        if nproc > n_lon:
+            raise ValueError(
+                    f'The pixel width of the image in longitude ({n_lon}) ' +
+                    f'must be greater than or equal to the number of processes ({nproc}).'
+            )
         store = HdfStore(store_name, nchunks=nproc)
         store.insert_header(self.stack)
         store.insert_fitter_pars(self)
