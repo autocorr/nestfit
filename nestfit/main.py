@@ -167,8 +167,8 @@ class DataCube:
 
     def get_spec_data(self, i_lon, i_lat):
         arr = self.data[i_lon,i_lat,:]  # axes reversed from typical cube
-        has_nans = np.isnan(arr).any()
         noise = self.noise_map.get_noise(i_lon, i_lat)
+        has_nans = np.isnan(arr).any() or np.isnan(noise)
         return self.xarr, arr, noise, self.trans_id, has_nans
 
 
