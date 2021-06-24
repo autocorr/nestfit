@@ -301,6 +301,15 @@ class HdfStore:
                     continue
                 yield group
 
+    def find_first_valid_group(self):
+        assert self.is_open
+        model_name = '1'  # one model component
+        for group in self.iter_pix_groups():
+            if model_name in group:
+                return group[model_name]
+        else:
+            raise ValueError('No valid pix groups found.')
+
     def link_files(self):
         assert self.is_open
         for chunk_path in self.chunk_paths:
@@ -831,7 +840,7 @@ def aggregate_run_products(store):
     # get list of marginal quantile information out of store
     ncomp_max = hdf.attrs['n_max_components']
     n_params = hdf.attrs['n_params']
-    test_group = hdf[f'pix/{n_lon//2}/{n_lat//2}/1']  # FIXME may not exist
+    test_group = store.find_first_valid_group()
     marg_quan = test_group.attrs['marg_quantiles']
     n_margs   = len(marg_quan)
     # dimensions (l, b, p, m) for MAP-parameter values
