@@ -1,6 +1,5 @@
 # Project specific folders
 build
-data
 plots
 run
 nestfit/**/*.html

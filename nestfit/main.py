@@ -12,7 +12,7 @@ import warnings
 import itertools
 import multiprocessing
 from pathlib import Path
-from collections import Iterable
+from collections.abc import Iterable
 
 import h5py
 import numpy as np
@@ -1334,13 +1334,14 @@ def profile_nested(ncomp=2):
                     updInt=2000)
 
 
-def get_test_cubestack(full=False):
-    # NOTE hack in indexing because last channel is all NaN's
-    cube11 = spectral_cube.SpectralCube.read('data/test_cube_11.fits')[:-1]
-    cube22 = spectral_cube.SpectralCube.read('data/test_cube_22.fits')[:-1]
-    if not full:
-        cube11 = cube11[:,155:195,155:195]
-        cube22 = cube22[:,155:195,155:195]
+def get_test_cubestack():
+    data_path = Path(__file__).parent / "test/data"
+    def read_cube(trans_id):
+        filen = str(data_path / f"ammonia_{str(trans_id)*2}_cutout.fits")
+        # NOTE hack in indexing because last channel is all NaN's
+        return spectral_cube.SpectralCube.read(filen)[:-1]
+    cube11 = read_cube(1)
+    cube22 = read_cube(2)
     noise_map = NoiseMapUniform(rms=0.35)
     cubes = (
             DataCube(cube11, noise_map=noise_map, trans_id=1),
