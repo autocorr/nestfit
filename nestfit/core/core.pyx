@@ -729,7 +729,7 @@ def run_multinest(
         IS=False, mmodal=True, ceff=False, nlive=400,
         tol=0.5, efr=0.3, nClsPar=None, maxModes=100, updInt=10, Ztol=-1e90,
         root='results', seed=-1, pWrap=None, fb=False, resume=False,
-        initMPI=False, outfile=False, logZero=-1e100, maxiter=0):
+        initMPI=False, outfile=False, logZero=-1e100, maxiter=int(1e6)):
     """
     Call the MultiNest `run` function. The `runner` and `dumper` classes wrap
     methods to perform the prior transformation, likelihood function call, and
@@ -773,7 +773,7 @@ def run_multinest(
     initMPI : bool, default False
     outfile : bool, default False
     logZero : float, default -1e100
-    maxiter : int, default 0
+    maxiter : int, default 1e6
     """
     assert runner.ndim > 0
     assert nlive > 0
